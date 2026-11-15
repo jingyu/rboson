@@ -20,8 +20,12 @@
 
 use serde::{Serialize, Deserialize};
 
-use boson_api::{utils, Id};
-use crate::SessionInfo;
+use boson_api::{
+    utils,
+    Id,
+    Result
+};
+use crate::{errors::EncodingError, MessageOriginated, SessionInfo};
 use super::{
     ChannelInfo,
     ChannelInfoUpdate,
@@ -94,23 +98,26 @@ impl Notification {
         &self.body
     }
 
-    pub(crate) fn is_channel_notification(&self) -> bool {
-        matches!(
-            &self.body,
-            Body::ChannelCreate(_)
-                | Body::ChannelJoin(_)
-                | Body::ChannelDeletion
-                | Body::ChannelLeave
-                | Body::ChannelOwnershipTransfer(_)
-                | Body::ChannelSessionKeyRotate(_)
-                | Body::ChannelInfoUpdate(_)
-                | Body::ChannelMembersRoleUpdate(_)
-                | Body::ChannelMembersBan(_)
-                | Body::ChannelMembersUnban(_)
-                | Body::ChannelMembersRemove(_)
-                | Body::ChannelMemberJoin(_)
-                | Body::ChannelMemberLeave(_)
+    pub(crate) fn serialize(&self) -> Result<Vec<u8>> {
+        serde_cbor::to_vec(self).map_err(|e|
+            EncodingError::new(&format!("serializing notification error: {e}")).into()
         )
+    }
+
+    pub(crate) fn deserialize(payload: &[u8]) -> Result<Self> {
+        serde_cbor::from_slice(payload).map_err(|e|
+            EncodingError::new(&format!("deserializing notification error: {e}")).into()
+        )
+    }
+}
+
+impl MessageOriginated for Notification {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn timestamp(&self) -> u64 {
+        self.timestamp
     }
 }
 

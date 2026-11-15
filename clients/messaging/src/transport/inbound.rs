@@ -274,14 +274,10 @@ impl RpcServer {
                     &format!("Malformed notification: {e}")
                 ))?;
 
-        let timestamp = notif.timestamp() as i64;
-        let originated = RpcServer::message_id(self.device_id(), timestamp)
-            .map(|ref id| notif.id() == id)
-            .unwrap_or(false);
 
         if notif.source() == self.user_id()
-            && notif.is_channel_notification()
-            && originated
+                && notif.is_originated(self.device_id())
+           // && notif.is_channel_notification()
         {
             trace!("Ignoring the channel notification originated by this device");
             return Ok(());
@@ -1175,7 +1171,7 @@ impl RpcServer {
         message.set_from(from);
         let now = now_millis();
         message.set_received_at(now);
-        
+
         message.payload_bytes = content_bytes;
         message.content = Some(content);
         message.set_converstation_id(contact_id);

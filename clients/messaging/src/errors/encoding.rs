@@ -18,10 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::{
-    error::Error,
-    fmt,
-};
+use std::{error::Error, fmt};
+
 #[derive(Debug)]
 pub struct EncodingError(String);
 impl EncodingError {
@@ -37,20 +35,3 @@ impl fmt::Display for EncodingError {
         write!(f, "{}", self.0)
     }
 }
-
-/*
-Io(std::io::Error),
-    /// Invalid argument or parameter.
-    Argument(String),
-    /// Protocol-level error (server returned an error code).
-    Protocol { code: i32, message: String },
-    /// The client is in an invalid state for the requested operation.
-    State(String),
-    /// Serialization / deserialization failure.
-    Encoding(String),
-    /// Authentication or signature verification failed.
-    Auth(String),
-    /// The requested item was not found.
-    NotFound(String),
-    /// Operation timed out.
-*/

@@ -18,10 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::{
-    error::Error,
-    fmt,
-};
+use std::{error::Error, fmt};
+
 #[derive(Debug)]
 pub struct NotFoundError(String);
 
