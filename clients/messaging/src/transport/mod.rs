@@ -49,6 +49,8 @@ use crate::{
     FriendRequest,
 };
 
+use crate::interfaces::FriendRequestOps;
+
 pub(super) const MESSAGE_VERSION: u8 = 2;
 pub(super) const HANDSHAKE_MESSAGE: u8 = 0;
 

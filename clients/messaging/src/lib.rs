@@ -112,6 +112,8 @@ pub use interfaces::{
     MessageContentOps,
     MessageBuilderOps,
     MessageOps,
+
+    FriendRequestOps,
 };
 
 pub(crate) use interfaces::MessageOriginated;

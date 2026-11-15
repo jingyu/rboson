@@ -1,5 +1,7 @@
 use super::prelude::*;
 
+use crate::interfaces::FriendRequestOps;
+
 pub(crate) struct RpcServer {
     pub(super) options: Arc<Options>,
     pub(super) mqtt_client: ClientHandle,

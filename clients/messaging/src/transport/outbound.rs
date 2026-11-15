@@ -1,6 +1,8 @@
 use super::prelude::*;
 use super::mqtt;
 
+use crate::interfaces::FriendRequestOps;
+
 #[derive(Clone, Copy)]
 enum MemberUpdate {
     /// Assign the given role.
@@ -165,7 +167,7 @@ impl RpcServer {
             *user_id,
             *self.user_identity.id(),
             hello,
-            Self::timestamp(timestamp),
+            timestamp as u64,
         );
         self.repository.borrow_mut().put_friend_request(&request)?;
         self.friend_requests_cache.borrow_mut().insert(*user_id, request);
@@ -213,7 +215,7 @@ impl RpcServer {
         self.store_friend_contact(user_id, &session_identity).await?;
         let timestamp = self.send_handshake(*user_id, value).await?;
 
-        if Self::timestamp(timestamp) < request.created_at() {
+        if (timestamp as u64) < request.created_at() {
             return Err(StateError::new("Friend request changed while accepting").into());
         }
 
@@ -1243,7 +1245,7 @@ impl RpcServer {
             return Err(StateError::new("Messaging client is not running").into());
         }
         let timestamp = Self::origin_timestamp(&self.origin_clock);
-        let handshake = Handshake::new(timestamp, body)?;
+        let handshake = Handshake { timestamp: timestamp as u64, body, from: None };
         let handshake_bytes = to_cbor_bytes(&handshake, "handshake")?;
         self.send_outbound(
             &user_id,

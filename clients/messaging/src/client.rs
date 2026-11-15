@@ -44,7 +44,6 @@ use crate::{
     contact::Contact,
     ContactListener,
     conversation::Conversation,
-    friend_request::FriendRequest,
     FriendRequestListener,
     invite_ticket::InviteTicket,
     message::{ Message, MessageBuilder},
@@ -53,8 +52,10 @@ use crate::{
     session_info::SessionInfo,
     SessionListener,
     MessagingClient,
+    FriendRequest,
 };
 
+use crate::interfaces::FriendRequestOps;
 use crate::internal::{
     self,
     verticle::{

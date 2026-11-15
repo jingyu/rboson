@@ -37,16 +37,17 @@ pub(crate) mod join_channel;
 pub(crate) mod session_context;
 pub(crate) mod connection_listener;
 
-pub(crate) mod photon_message;
 pub(crate) mod message_builder;
-
-pub(crate) mod photon_channel;
-pub(crate) mod photon_contact;
-pub(crate) mod photon_conversation;
 pub(crate) mod channel_member;
 
 pub(crate) mod messaging_repository;
 pub(crate) mod verticle;
+
+pub(crate) mod photon_message;
+pub(crate) mod photon_channel;
+pub(crate) mod photon_contact;
+pub(crate) mod photon_conversation;
+pub(crate) mod photon_friend_request;
 
 pub(crate) use {
     handshake::{
@@ -54,6 +55,7 @@ pub(crate) use {
         HandshakeType,
     },
     notification::Notification,
+    photon_friend_request::PhotonFriendRequest,
 
     channel_session_rotation::SessionKeyRotation as ChannelSessionKeyRotation,
     new_channel_info::NewChannelInfo,

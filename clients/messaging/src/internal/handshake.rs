@@ -18,19 +18,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use serde::{Deserialize, Serialize};
 
 use boson_api::{
-    errors::{
-        Error,
-        Result,
-    },
+    utils,
     Id,
+    errors::{Result},
 };
-
 use crate::errors::EncodingError;
 
 /// Friend-request handshake payload.
@@ -40,60 +34,133 @@ pub(crate) enum HandshakeType {
     #[serde(rename = "fr")]
     FriendRequest(Option<String>),
     #[serde(rename = "fra")]
-    FriendRequestAccept(
-        #[serde(with = "serde_with::As::<serde_with::Bytes>")] Vec<u8>,
-    ),
+    FriendRequestAccept(#[serde(with="utils::bytes")] Vec<u8>),
 }
 
 /// Signed friend handshake envelope.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(try_from = "HandshakeData")]
+#[derive(Debug, Serialize)]
 pub(crate) struct Handshake {
     #[serde(rename = "t")]
-    pub(crate) timestamp: i64,
+    pub(crate) timestamp: u64,
 
     #[serde(flatten)]
     pub(crate) body: HandshakeType,
 
-    /// Sender identity, filled in by the transport layer.
     #[serde(skip)]
     pub(crate) from: Option<Id>,
 }
 
-#[derive(Deserialize)]
-struct HandshakeData {
-    #[serde(rename = "t")]
-    timestamp: i64,
-    #[serde(flatten)]
-    body: HandshakeType,
-}
+impl<'de> Deserialize<'de> for Handshake {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
 
-impl TryFrom<HandshakeData> for Handshake {
-    type Error = Error;
+        let value = serde_cbor::Value::deserialize(deserializer)?;
+        let serde_cbor::Value::Map(map) = value else {
+            return Err(D::Error::custom("Handshake payload is not a map"));
+        };
 
-    fn try_from(data: HandshakeData) -> Result<Self> {
-        Self::new(data.timestamp, data.body)
+        let mut timestamp = None;
+        let mut tag = None;
+        let mut body = None;
+        for (key, value) in map {
+            let serde_cbor::Value::Text(key) = key else {
+                return Err(D::Error::custom("Handshake key is not text"));
+            };
+            match key.as_str() {
+                "t" => {
+                    let serde_cbor::Value::Integer(value) = value else {
+                        return Err(D::Error::custom("Handshake timestamp is not an integer"));
+                    };
+                    let value: i128 = value.into();
+                    if value < 0 || value > u64::MAX as i128 {
+                        return Err(D::Error::custom("Handshake timestamp is out of range"));
+                    }
+                    timestamp = Some(value as u64);
+                }
+                "y" => {
+                    let serde_cbor::Value::Text(value) = value else {
+                        return Err(D::Error::custom("Handshake type is not text"));
+                    };
+                    tag = Some(value);
+                }
+                "b" => body = Some(value),
+                _ => return Err(D::Error::custom("Unknown handshake field")),
+            }
+        }
+
+        let timestamp = timestamp.ok_or_else(|| D::Error::custom("Missing handshake timestamp"))?;
+        let tag = tag.ok_or_else(|| D::Error::custom("Missing handshake type"))?;
+        let body = match tag.as_str() {
+            "fr" => match body {
+                None | Some(serde_cbor::Value::Null) => HandshakeType::FriendRequest(None),
+                Some(serde_cbor::Value::Text(hello)) => HandshakeType::FriendRequest(Some(hello)),
+                _ => return Err(D::Error::custom("Invalid friend request body")),
+            },
+            "fra" => match body {
+                Some(serde_cbor::Value::Bytes(key)) if key.len() == 64 => {
+                    HandshakeType::FriendRequestAccept(key)
+                }
+                _ => return Err(D::Error::custom("Invalid friend request accept body")),
+            },
+            _ => return Err(D::Error::custom("Unknown handshake type")),
+        };
+
+        Ok(Self {
+            timestamp,
+            body,
+            from: None,
+        })
     }
 }
 
 impl Handshake {
     pub(crate) fn new(timestamp: i64, body: HandshakeType) -> Result<Self> {
         if timestamp < 0 {
-            return Err(EncodingError::new("Handshake timestamp is negative"));
+            return Err(EncodingError::new("Handshake timestamp is negative").into());
         }
-        if let HandshakeType::FriendRequestAccept(key) = &body {
-            if key.len() != boson_api::signature::PrivateKey::BYTES {
-                return Err(EncodingError::new(format!(
-                    "Invalid friend session key length: {}",
-                    key.len()
-                )));
-            }
+        if matches!(&body, HandshakeType::FriendRequestAccept(key) if key.len() != 64) {
+            return Err(EncodingError::new("Handshake session key has an invalid length").into());
         }
         Ok(Self {
-            timestamp,
+            timestamp: timestamp as u64,
             body,
             from: None,
         })
+    }
+
+    pub(crate) fn friend_request(hello: Option<String>, timestamp: u64) -> Self {
+        Self {
+            timestamp: timestamp,
+            body: HandshakeType::FriendRequest(hello),
+            from: None,
+        }
+    }
+
+    pub(crate) fn friend_request_accept(session_key: Vec<u8>, timestamp: u64) -> Self {
+        Self {
+            timestamp,
+            body: HandshakeType::FriendRequestAccept(session_key),
+            from: None,
+        }
+    }
+
+    pub(crate) fn set_from(&mut self, from: Id) {
+        self.from = Some(from);
+    }
+
+    pub(crate) fn serialize(&self) -> Result<Vec<u8>> {
+        serde_cbor::to_vec(self).map_err(|e|
+            EncodingError::new(&format!("Serialize handshake error: {e}")).into()
+        )
+    }
+
+    pub(crate) fn deserialize(payload: &[u8]) -> Result<Self> {
+        serde_cbor::from_slice(payload).map_err(|e|
+            EncodingError::new(&format!("Deserialize handshake error: {e}")).into()
+        )
     }
 }
 

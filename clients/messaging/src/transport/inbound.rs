@@ -7,10 +7,11 @@ use crate::internal::{
     notification::{Body, Notification},
 };
 
-use crate::{
+use crate::interfaces::{
     MessageOps,
     MessageOriginated,
-    ChannelOps
+    ChannelOps,
+    FriendRequestOps,
 };
 use crate::rpc::response::RpcResponse;
 use crate::MessageType;
@@ -891,7 +892,7 @@ impl RpcServer {
                         *self.user_identity.id()
                     },
                     hello.unwrap_or_default(),
-                    handshake.timestamp,
+                    handshake.timestamp as i64,
                     is_inbox,
                 ).await;
                 Ok(())
@@ -900,7 +901,7 @@ impl RpcServer {
                 self.accept_friend_handshake(
                     friend_id,
                     session_key,
-                    handshake.timestamp,
+                    handshake.timestamp as i64,
                     is_inbox
                 )
                 .await;
@@ -944,7 +945,7 @@ impl RpcServer {
             }
         }
 
-        let created_at = Self::timestamp(timestamp);
+        let created_at = timestamp as u64;
         if self.friend_request(&user_id).await
             .is_some_and(|request| request.is_accepted() || request.created_at() >= created_at)
         {
@@ -952,7 +953,12 @@ impl RpcServer {
             return;
         }
 
-        let request = FriendRequest::new(user_id, initiator_id, Some(hello.clone()), created_at);
+        let request = FriendRequest::new(
+            user_id,
+            initiator_id,
+            Some(hello.clone()),
+            created_at,
+        );
         if let Err(error) = self.repository.borrow_mut().put_friend_request(&request) {
             warn!("Persisting friend request failed: {error}");
         }
@@ -1050,7 +1056,7 @@ impl RpcServer {
             Ok(req) => req,
             Err(_) => return,
         };
-        if Self::timestamp(timestamp) < request.created_at() {
+        if (timestamp as u64)< request.created_at() {
             warn!("Friend request acceptance predates the request");
             return;
         }
@@ -1070,7 +1076,7 @@ impl RpcServer {
             .unwrap()
             .entry(friend_id)
             .or_insert_with(|| self.session_context(friend_id, session_identity, false));
-        self.on_friend_request_accepted(friend_id, timestamp, is_inbox);
+        self.on_friend_request_accepted(friend_id, timestamp as i64, is_inbox);
     }
 
     pub(super) fn on_friend_request_accepted(&self, user_id: Id, timestamp: i64, notify: bool) {
@@ -1079,7 +1085,7 @@ impl RpcServer {
             return;
         }
 
-        let accepted_at = Self::timestamp(timestamp);
+        let accepted_at = timestamp as u64;
         {
             let mut requests = self.friend_requests_cache.borrow_mut();
             let Some(request) = requests.get_mut(&user_id) else {
@@ -1097,7 +1103,7 @@ impl RpcServer {
                 warn!("Ignoring friend request acceptance from {user_id} that does not match the pending request");
                 return;
             }
-            request.accept_at(accepted_at);
+            request.accept(accepted_at);
         }
         if let Some(request) = self.friend_requests_cache.borrow().get(&user_id).cloned() {
             if let Err(error) = self.repository.borrow_mut().put_friend_request(&request) {

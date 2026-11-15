@@ -55,6 +55,7 @@ use crate::{
 use crate::interfaces::{
     MessageContentOps,
     MessageOps,
+    FriendRequestOps,
 };
 
 use crate::internal::{
@@ -518,14 +519,10 @@ fn friend_request_to_stored(request: &FriendRequest) -> Result<StoredFriendReque
         id: *request.user_id(),
         initiator: *request.initiator_id(),
         hello: request.hello().map(ToOwned::to_owned),
-        created_at: time_to_millis(request.created_at())?,
-        updated_at: time_to_millis(request.updated_at())?,
+        created_at: request.created_at() as i64,
+        updated_at: request.updated_at() as i64,
         accepted: request.is_accepted(),
-        accepted_at: request
-            .accepted_at()
-            .map(time_to_millis)
-            .transpose()?
-            .unwrap_or(0),
+        accepted_at: request.accepted_at().unwrap_or(0) as i64
     })
 }
 
@@ -622,7 +619,7 @@ mod tests {
             id(4),
             id(5),
             Some("hello".into()),
-            SystemTime::UNIX_EPOCH + Duration::from_millis(10),
+            10,
         );
         repository.put_friend_request(&request).unwrap();
         assert_eq!(repository.load_friend_requests().unwrap().len(), 1);

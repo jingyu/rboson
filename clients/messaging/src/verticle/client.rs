@@ -35,6 +35,7 @@ use crate::{
     invite_ticket::InviteTicket,
     message::Message,
 };
+use crate::interfaces::FriendRequestOps;
 
 use super::{
     event::{
