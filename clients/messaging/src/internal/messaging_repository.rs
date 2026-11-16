@@ -48,14 +48,14 @@ use crate::{
         StoredFriendRequest,
         StoredMessage,
     },
-    friend_request::FriendRequest,
+    internal::photon_friend_request::PhotonFriendRequest,
     Message,
+    FriendRequest,
 };
 
 use crate::interfaces::{
     MessageContentOps,
     MessageOps,
-    FriendRequestOps,
 };
 
 use crate::internal::{
@@ -252,7 +252,7 @@ impl MessagingRepository {
         self.store.remove_channel_members(channel_id, members)
     }
 
-    pub(crate) fn put_friend_request(&mut self, request: &FriendRequest) -> Result<()> {
+    pub(crate) fn put_friend_request(&mut self, request: &PhotonFriendRequest) -> Result<()> {
         self.store
             .put_friend_request(&friend_request_to_stored(request)?)
     }
@@ -265,7 +265,7 @@ impl MessagingRepository {
         self.store.clear_friend_requests()
     }
 
-    pub(crate) fn load_friend_requests(&mut self) -> Result<Vec<FriendRequest>> {
+    pub(crate) fn load_friend_requests(&mut self) -> Result<Vec<PhotonFriendRequest>> {
         self.store
             .get_friend_requests()?
             .into_iter()
@@ -514,7 +514,7 @@ fn stored_to_photon_member(stored: &StoredChannelMember) -> Result<PhotonChannel
     ))
 }
 
-fn friend_request_to_stored(request: &FriendRequest) -> Result<StoredFriendRequest> {
+fn friend_request_to_stored(request: &PhotonFriendRequest) -> Result<StoredFriendRequest> {
     Ok(StoredFriendRequest {
         id: *request.user_id(),
         initiator: *request.initiator_id(),
@@ -526,8 +526,8 @@ fn friend_request_to_stored(request: &FriendRequest) -> Result<StoredFriendReque
     })
 }
 
-fn stored_to_friend_request(stored: StoredFriendRequest) -> Result<FriendRequest> {
-    Ok(FriendRequest::restore(
+fn stored_to_friend_request(stored: StoredFriendRequest) -> Result<PhotonFriendRequest> {
+    Ok(PhotonFriendRequest::restore(
         stored.id,
         stored.initiator,
         stored.hello,
@@ -615,7 +615,7 @@ mod tests {
         let conversation = repository.conversation(&contact_id).unwrap().unwrap();
         assert_eq!(conversation.id(), &contact_id);
 
-        let request = FriendRequest::new(
+        let request = PhotonFriendRequest::new(
             id(4),
             id(5),
             Some("hello".into()),

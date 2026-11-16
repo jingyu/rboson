@@ -15,6 +15,7 @@ use boson::messaging::{
     MessagingClient,
     Permission,
     Role,
+    FriendRequest,
 };
 
 const BOB_YAML: &str = "tests/apitests/messaging/bob.yaml";
@@ -160,11 +161,11 @@ async fn wait_for_friend_request(
     user_id: Id,
     created_at: SystemTime,
     accepted: bool,
-) -> boson::messaging::FriendRequest {
+) -> boson::messaging::BoxedFriendRequest {
     time::timeout(Duration::from_secs(15), async {
         loop {
             if let Some(request) = client.get_friend_request(user_id).await.unwrap() {
-                if request.created_at() == created_at && request.is_accepted() == accepted {
+                if request.created() == created_at && request.is_accepted() == accepted {
                     return request;
                 }
             }
@@ -271,7 +272,7 @@ async fn make_friends_by_request(bob: &Client, alice: &Client) {
     let incoming = wait_for_friend_request(
         alice,
         bob_id,
-        outgoing_request.created_at(),
+        outgoing_request.created(),
         false,
     )
     .await;
@@ -283,14 +284,14 @@ async fn make_friends_by_request(bob: &Client, alice: &Client) {
     wait_for_friend_request(
         bob,
         alice_id,
-        outgoing_request.created_at(),
+        outgoing_request.created(),
         true,
     )
     .await;
     wait_for_friend_request(
         alice,
         bob_id,
-        outgoing_request.created_at(),
+        outgoing_request.created(),
         true,
     )
     .await;
@@ -630,8 +631,8 @@ mod friend_requests {
         assert_eq!(first.initiator_id(), client.user_id());
         assert_eq!(first.hello(), Some("first"));
         assert!(!first.is_accepted());
-        assert!(first.accepted_at().is_none());
-        assert!(first.created_at() <= first.updated_at());
+        assert!(first.accepted().is_none());
+        assert!(first.created() <= first.updated());
         assert!(!first.is_expired());
 
         let second = client
@@ -688,13 +689,13 @@ mod friend_requests {
         assert_eq!(outgoing.initiator_id(), &sender_id);
         assert_eq!(outgoing.hello(), Some("hello"));
         assert!(!outgoing.is_accepted());
-        assert!(outgoing.accepted_at().is_none());
+        assert!(outgoing.accepted().is_none());
         check_friend_requests(&sender, recipient_id, false).await;
 
         let incoming = wait_for_friend_request(
             &recipient,
             sender_id,
-            outgoing.created_at(),
+            outgoing.created(),
             false,
         )
         .await;
@@ -709,12 +710,12 @@ mod friend_requests {
         let accepted = wait_for_friend_request(
             &sender,
             recipient_id,
-            outgoing.created_at(),
+            outgoing.created(),
             true,
         )
         .await;
         assert!(accepted.is_accepted());
-        assert!(accepted.accepted_at().unwrap() >= accepted.created_at());
+        assert!(accepted.accepted().unwrap() >= accepted.created());
 
         let local = recipient
             .get_friend_request(sender_id)
@@ -722,7 +723,7 @@ mod friend_requests {
             .unwrap()
             .expect("The accepted request should be stored locally");
         assert!(local.is_accepted());
-        assert_eq!(accepted.accepted_at(), local.accepted_at());
+        assert_eq!(accepted.accepted(), local.accepted());
 
         check_friend_requests(&sender, recipient_id, true).await;
         check_friend_requests(&recipient, sender_id, true).await;

@@ -18,6 +18,46 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::interfaces::FriendRequestOps;
+use std::time::SystemTime;
 
-pub use crate::internal::photon_friend_request::PhotonFriendRequest as FriendRequest;
+use boson_api::Id;
+
+// Represents a friend request in the messaging system.
+// A friend request captures the negotiation between two users to establish
+// a friendship, including the initiator, any greeting message, and its status.
+
+pub trait FriendRequest {
+    /// Returns the identifier of the user involved in the friend request (the other side).
+    fn user_id(&self) -> &Id;
+
+    /// Returns the identifier of the user who initiated the friend request.
+    fn initiator_id(&self) -> &Id;
+
+    /// Returns the greeting message (hello message) sent with the request.
+    fn hello(&self) -> Option<&str>;
+
+    /// Checks whether this is an outgoing request, one the current user sent.
+    fn is_outgoing(&self) -> bool {
+        self.initiator_id() != self.user_id()
+    }
+
+    /// Checks if the friend request has been accepted.
+    fn is_accepted(&self) -> bool;
+
+    /// Checks if the friend request has expired.
+    fn is_expired(&self) -> bool;
+
+    /// Returns the timestamp when the friend request was sent, the same on both sides.
+    fn created(&self) -> SystemTime;
+
+    /// Returns the timestamp when the friend request was accepted.
+    fn accepted(&self) -> Option<SystemTime>;
+
+    /// Returns the timestamp when this record last changed on this device: when the request was sent
+    /// or received, or when it was accepted.
+    fn updated(&self) -> SystemTime;
+
+
+}
+
+pub type BoxedFriendRequest = Box<dyn FriendRequest>;

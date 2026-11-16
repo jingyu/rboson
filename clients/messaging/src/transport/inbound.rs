@@ -11,10 +11,12 @@ use crate::interfaces::{
     MessageOps,
     MessageOriginated,
     ChannelOps,
-    FriendRequestOps,
 };
 use crate::rpc::response::RpcResponse;
-use crate::MessageType;
+use crate::{
+    MessageType,
+    FriendRequest,
+};
 
 use crate::internal::photon_message::PhotonMessage;
 
@@ -953,7 +955,7 @@ impl RpcServer {
             return;
         }
 
-        let request = FriendRequest::new(
+        let request = PhotonFriendRequest::new(
             user_id,
             initiator_id,
             Some(hello.clone()),
@@ -970,7 +972,7 @@ impl RpcServer {
         }
     }
 
-    pub(super) fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<FriendRequest> {
+    pub(super) fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<PhotonFriendRequest> {
         let requests = self.friend_requests_cache.borrow();
         let request = requests
             .get(user_id)

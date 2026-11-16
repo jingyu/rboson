@@ -21,7 +21,10 @@
 use std::time::{Duration, SystemTime};
 
 use boson_api::Id;
-use crate::interfaces::FriendRequestOps;
+use crate::{
+    FriendRequest,
+    BoxedFriendRequest
+};
 
 #[derive(Debug, Clone)]
 pub struct PhotonFriendRequest {
@@ -144,7 +147,7 @@ impl PhotonFriendRequest {
     }
 }
 
-impl FriendRequestOps for PhotonFriendRequest {
+impl FriendRequest for PhotonFriendRequest {
     fn user_id(&self) -> &Id {
         &self.user_id
     }
@@ -179,5 +182,31 @@ impl FriendRequestOps for PhotonFriendRequest {
 
     fn updated(&self) -> SystemTime {
         boson_api::from_ms!(self.updated_at)
+    }
+}
+
+impl From<PhotonFriendRequest> for BoxedFriendRequest {
+    fn from(request: PhotonFriendRequest) -> Self {
+        Box::new(request)
+    }
+}
+
+impl From<Box<PhotonFriendRequest>> for BoxedFriendRequest {
+    fn from(request: Box<PhotonFriendRequest>) -> Self {
+        request
+    }
+}
+
+impl From<BoxedFriendRequest> for PhotonFriendRequest {
+    fn from(request: BoxedFriendRequest) -> Self {
+        Self::restore(
+            *request.user_id(),
+            *request.initiator_id(),
+            request.hello().map(ToString::to_string),
+            request.is_accepted(),
+            boson_api::as_ms!(request.created()) as u64,
+            request.accepted().map(|value| boson_api::as_ms!(value) as u64),
+            boson_api::as_ms!(request.updated()) as u64,
+        )
     }
 }

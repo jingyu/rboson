@@ -1,7 +1,7 @@
 use super::prelude::*;
 use super::mqtt;
 
-use crate::interfaces::FriendRequestOps;
+use crate::FriendRequest;
 
 #[derive(Clone, Copy)]
 enum MemberUpdate {
@@ -163,7 +163,7 @@ impl RpcServer {
             .send_handshake(*user_id, HandshakeType::FriendRequest(hello.clone()))
             .await?;
 
-        let request = FriendRequest::new(
+        let request = PhotonFriendRequest::new(
             *user_id,
             *self.user_identity.id(),
             hello,
@@ -231,7 +231,7 @@ impl RpcServer {
     pub(crate) async fn get_friend_request(
         &self,
         user_id: &Id
-    ) -> Result<Option<FriendRequest>> {
+    ) -> Result<Option<PhotonFriendRequest>> {
         Ok(
             self.friend_requests_cache.borrow()
                 .get(user_id)
@@ -239,7 +239,7 @@ impl RpcServer {
         )
     }
 
-    pub(crate) async fn get_friend_requests(&self) -> Result<Vec<FriendRequest>> {
+    pub(crate) async fn get_friend_requests(&self) -> Result<Vec<PhotonFriendRequest>> {
         Ok(
             self.friend_requests_cache.borrow()
                 .values()

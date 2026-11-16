@@ -1,6 +1,6 @@
 use super::prelude::*;
 
-use crate::interfaces::FriendRequestOps;
+use crate::FriendRequest;
 
 pub(crate) struct RpcServer {
     pub(super) options: Arc<Options>,
@@ -30,7 +30,7 @@ pub(crate) struct RpcServer {
 
     pub(super) repository: Rc<RefCell<MessagingRepository>>,
 
-    pub(super) friend_requests_cache: AsyncCache<FriendRequest>,
+    pub(super) friend_requests_cache: AsyncCache<PhotonFriendRequest>,
     pub(super) channels_cache: AsyncCache<Channel>,
     pub(super) contacts_cache: AsyncCache<Contact>,
     pub(super) conversations_cache: AsyncCache<PhotonConversation>,

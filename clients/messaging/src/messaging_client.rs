@@ -33,7 +33,7 @@ use crate::{
     Contact,
     SessionInfo,
     Conversation,
-    FriendRequest,
+    BoxedFriendRequest,
     InviteTicket,
     Message,
     MessageBuilder
@@ -166,12 +166,12 @@ pub trait MessagingClient {
     fn get_friend_request(
         &self,
         user_id: &Id,
-    ) -> impl Future<Output = Result<Option<FriendRequest>>>;
+    ) -> impl Future<Output = Result<Option<BoxedFriendRequest>>>;
 
     /// Retrieves all pending / received friend requests.
     fn get_friend_requests(
         &self
-    ) -> impl Future<Output = Result<Vec<FriendRequest>>>;
+    ) -> impl Future<Output = Result<Vec<BoxedFriendRequest>>>;
 
     /// Removes a friend request by user `Id`.
     fn remove_friend_request(

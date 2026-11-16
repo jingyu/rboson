@@ -52,10 +52,10 @@ use crate::{
     session_info::SessionInfo,
     SessionListener,
     MessagingClient,
+    BoxedFriendRequest,
     FriendRequest,
 };
 
-use crate::interfaces::FriendRequestOps;
 use crate::internal::{
     self,
     verticle::{
@@ -537,13 +537,13 @@ impl Client {
     }
 
     /// Looks up a single pending friend request.
-    pub async fn get_friend_request(&self, user_id: Id) -> Result<Option<FriendRequest>> {
-        self.verticle_client()?.get_friend_request(user_id).await
+    pub async fn get_friend_request(&self, user_id: Id) -> Result<Option<BoxedFriendRequest>> {
+        self.verticle_client()?.get_friend_request(user_id).await.map(|request| request.map(Into::into))
     }
 
     /// Lists every pending friend request.
-    pub async fn get_friend_requests(&self) -> Result<Vec<FriendRequest>> {
-        self.verticle_client()?.get_friend_requests().await
+    pub async fn get_friend_requests(&self) -> Result<Vec<BoxedFriendRequest>> {
+        self.verticle_client()?.get_friend_requests().await.map(|requests| requests.into_iter().map(Into::into).collect())
     }
 
     /// Dismisses a pending friend request without accepting it.
@@ -911,11 +911,11 @@ impl MessagingClient for Client {
         self.accept_friend_request(*userid).await
     }
 
-    async fn get_friend_request(&self, user_id: &Id) -> Result<Option<FriendRequest>> {
+    async fn get_friend_request(&self, user_id: &Id) -> Result<Option<BoxedFriendRequest>> {
         self.get_friend_request(*user_id).await
     }
 
-    async fn get_friend_requests(&self) -> Result<Vec<FriendRequest>> {
+    async fn get_friend_requests(&self) -> Result<Vec<BoxedFriendRequest>> {
         self.get_friend_requests().await
     }
 

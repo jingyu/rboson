@@ -49,7 +49,7 @@ use crate::{
     FriendRequest,
 };
 
-use crate::interfaces::FriendRequestOps;
+use crate::internal::photon_friend_request::PhotonFriendRequest;
 
 pub(super) const MESSAGE_VERSION: u8 = 2;
 pub(super) const HANDSHAKE_MESSAGE: u8 = 0;
@@ -218,7 +218,7 @@ impl RpcServer {
             .flatten()
     }
 
-    pub(crate) async fn friend_request(&self, id: &Id) -> Option<FriendRequest> {
+    pub(crate) async fn friend_request(&self, id: &Id) -> Option<PhotonFriendRequest> {
         self.friend_requests_cache
             .get(id, |repository, id| {
                 Ok(repository

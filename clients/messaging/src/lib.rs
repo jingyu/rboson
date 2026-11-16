@@ -59,9 +59,7 @@ pub use {
 
     messaging_client::MessagingClient,
 
-    friend_request::FriendRequest,
     friend_request_listener::FriendRequestListener,
-
     connection_listener::ConnectionListener,
     contact_listener::ContactListener,
     message_listener::MessageListener,
@@ -98,6 +96,8 @@ pub use {
     },
 
     session_info::SessionInfo,
+
+    friend_request::{FriendRequest, BoxedFriendRequest},
 };
 
 pub use interfaces::{
@@ -112,8 +112,6 @@ pub use interfaces::{
     MessageContentOps,
     MessageBuilderOps,
     MessageOps,
-
-    FriendRequestOps,
 };
 
 pub(crate) use interfaces::MessageOriginated;

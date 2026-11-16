@@ -31,11 +31,11 @@ use crate::{
     channel::{Permission, Role, Channel},
     contact::Contact,
     conversation::Conversation,
-    friend_request::FriendRequest,
+    internal::photon_friend_request::PhotonFriendRequest,
     invite_ticket::InviteTicket,
-    message::Message,
+    Message,
+    FriendRequest,
 };
-use crate::interfaces::FriendRequestOps;
 
 use super::{
     event::{
@@ -226,7 +226,7 @@ impl VerticleClient {
         self.call(make_event).await
     }
 
-    pub(crate) async fn get_friend_request(&self, user_id: Id) -> Result<Option<FriendRequest>> {
+    pub(crate) async fn get_friend_request(&self, user_id: Id) -> Result<Option<PhotonFriendRequest>> {
         let make_event = |promise| {
             Event::GetFriendRequests(Body::new(Some(user_id), promise))
         };
@@ -234,7 +234,7 @@ impl VerticleClient {
         Ok(requests.into_iter().next())
     }
 
-    pub(crate) async fn get_friend_requests(&self) -> Result<Vec<FriendRequest>> {
+    pub(crate) async fn get_friend_requests(&self) -> Result<Vec<PhotonFriendRequest>> {
         let make_event = |promise| {
             Event::GetFriendRequests(Body::new(None, promise))
         };

@@ -29,7 +29,6 @@ use boson::messaging::{
     Client,
     ContactType,
     FriendRequest,
-    FriendRequestOps
 };
 
 use super::parse_id;

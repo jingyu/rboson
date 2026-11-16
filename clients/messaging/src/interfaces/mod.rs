@@ -23,7 +23,6 @@ mod contact;
 mod conversation;
 mod message;
 mod message_originated;
-mod friend_request;
 
 pub use {
     channel::Channel as ChannelOps,
@@ -37,8 +36,6 @@ pub use {
     message::Message as MessageOps,
     message::MessageContent as MessageContentOps,
     message::MessageBuilder as MessageBuilderOps,
-
-    friend_request::FriendRequest as FriendRequestOps,
 };
 
 pub(crate) use {
