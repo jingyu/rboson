@@ -914,9 +914,7 @@ impl RpcServer {
         let Value::Bytes(bytes) = payload else {
             return Err(EncodingError::new("Handshake payload is not binary").into());
         };
-        let mut handshake: Handshake = serde_cbor::from_slice(&bytes).map_err(|error| {
-            EncodingError::new(format!("Malformed handshake: {error}"))
-        })?;
+        let mut handshake = Handshake::deserialize(&bytes)?;
         handshake.from = Some(*from);
         let _ = friend_id;
         Ok(handshake)

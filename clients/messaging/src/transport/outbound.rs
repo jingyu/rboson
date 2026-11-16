@@ -1156,8 +1156,15 @@ impl RpcServer {
             return Err(StateError::new("Messaging client is not running").into());
         }
         let timestamp = Self::origin_timestamp(&self.origin_clock);
-        let handshake = Handshake { timestamp: timestamp as u64, body, from: None };
-        let handshake_bytes = to_cbor_bytes(&handshake, "handshake")?;
+        let handshake = match body {
+            HandshakeType::FriendRequest(hello) => {
+                Handshake::friend_request(hello, timestamp as u64)
+            }
+            HandshakeType::FriendRequestAccept(session_key) => {
+                Handshake::friend_request_accept(session_key, timestamp as u64)
+            }
+        };
+        let handshake_bytes = handshake.serialize()?;
         self.send_outbound(
             &user_id,
             HANDSHAKE_MESSAGE,
