@@ -47,7 +47,6 @@ pub(crate) use crate::{
 
 pub(crate) use crate::interfaces::{
     ChannelMemberOps,
-    ConversationOps,
     MessageBuilderOps,
 };
 

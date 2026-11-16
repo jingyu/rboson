@@ -80,7 +80,6 @@ pub use {
         ContactEditor
     },
 
-    conversation::Conversation,
     message::{
         Message,
         MessageContent,
@@ -97,6 +96,7 @@ pub use {
 
     session_info::SessionInfo,
 
+    conversation::{Conversation, BoxedConversation},
     friend_request::{FriendRequest, BoxedFriendRequest},
 };
 
@@ -108,7 +108,6 @@ pub use interfaces::{
     ContactOps,
     ContactEditorOps,
 
-    ConversationOps,
     MessageContentOps,
     MessageBuilderOps,
     MessageOps,

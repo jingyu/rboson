@@ -53,7 +53,6 @@ use super::{
     StoredChannelMember,
     StoredContact,
     StoredConversation,
-    StoredFriendRequest,
     StoredMessage,
 };
 use crate::{

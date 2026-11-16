@@ -27,12 +27,16 @@ use boson_api::{
     Id,
     errors::{Result, ArgumentError}
 };
-use crate::{
+
+use crate::interfaces::{
     MessageOps,
-    ConversationOps,
+};
+use crate::{
     contact::{Contact, ContactType},
+    conversation::BoxedConversation,
     invite_ticket::InviteTicket,
     message::Message,
+    Conversation,
 };
 
 #[derive(Clone)]
@@ -116,7 +120,7 @@ impl Hash for PhotonConversation {
     }
 }
 
-impl ConversationOps for PhotonConversation {
+impl Conversation for PhotonConversation {
     fn id(&self) -> &Id {
         self.contact.id()
     }
@@ -134,6 +138,19 @@ impl ConversationOps for PhotonConversation {
     }
 
     fn updated_at(&self) -> Option<SystemTime> {
-        self.last_message.as_ref().and_then(|message| message.received_at().or(message.sent_at()))
+        self.last_message.as_ref()
+            .and_then(|message| message.received_at().or(message.sent_at()))
+    }
+}
+
+impl Into<BoxedConversation> for PhotonConversation {
+    fn into(self) -> BoxedConversation {
+        Box::new(self)
+    }
+}
+
+impl Into<BoxedConversation> for Box<PhotonConversation> {
+    fn into(self) -> BoxedConversation {
+        self
     }
 }

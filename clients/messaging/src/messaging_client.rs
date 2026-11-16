@@ -36,7 +36,8 @@ use crate::{
     BoxedFriendRequest,
     InviteTicket,
     Message,
-    MessageBuilder
+    MessageBuilder,
+    BoxedConversation,
 };
 
 /// Default maximum number of messages returned by a range query.
@@ -89,10 +90,10 @@ pub trait MessagingClient {
     ) -> MessageBuilder;
 
     /// Retrieves a specific conversation by its identifier.
-    fn conversation(&self, id: &Id) -> impl Future<Output = Result<Option<Conversation>>>;
+    fn conversation(&self, id: &Id) -> impl Future<Output = Result<Option<BoxedConversation>>>;
 
     /// Retrieves all conversations for the local user.
-    fn conversations(&self) -> impl Future<Output = Result<Vec<Conversation>>>;
+    fn conversations(&self) -> impl Future<Output = Result<Vec<BoxedConversation>>>;
 
     /// Removes a conversation and all its associated messages.
     fn remove_conversation(&self, id: &Id) -> impl Future<Output = Result<()>>;

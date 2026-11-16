@@ -83,17 +83,6 @@ pub(crate) struct StoredChannelMember {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct StoredFriendRequest {
-    pub(crate) id: Id,
-    pub(crate) initiator: Id,
-    pub(crate) hello: Option<String>,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
-    pub(crate) accepted: bool,
-    pub(crate) accepted_at: i64,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct StoredConversation {
     pub(crate) contact: StoredContact,
     pub(crate) last_message: Option<StoredMessage>,

@@ -130,3 +130,74 @@ async fn clear_friend_request_clears_repository_and_cache() {
     assert!(server.friend_requests().await.is_empty());
     assert!(server.friend_request(request.user_id()).await.is_none());
 }
+
+fn conversation(user_id: Id) -> PhotonConversation {
+    let contact = Box::new(crate::internal::photon_contact::PhotonContact::new(
+        user_id,
+        crate::contact::ContactType::Friend,
+        1,
+    )) as Contact;
+    PhotonConversation::new(contact)
+}
+
+#[tokio::test]
+async fn conversation_put_get_and_remove() {
+    let server = server();
+    let user_id = *CryptoIdentity::new().id();
+    let conversation = conversation(user_id);
+
+    server.put_conversation(&conversation).await.unwrap();
+
+    let loaded = server.conversation(&user_id).await.unwrap();
+    assert_eq!(*loaded.id(), user_id);
+
+    server.remove_conversation(&user_id).await.unwrap();
+    assert!(server.conversation(&user_id).await.is_none());
+    assert!(server.conversations().await.is_empty());
+}
+
+#[tokio::test]
+async fn conversations_merge_repository_and_cache() {
+    let server = server();
+    let first = conversation(*CryptoIdentity::new().id());
+    let second = conversation(*CryptoIdentity::new().id());
+
+    server.put_conversation(&first).await.unwrap();
+    server.put_conversation(&second).await.unwrap();
+
+    let conversations = server.conversations().await;
+    assert_eq!(conversations.len(), 2);
+    assert!(conversations.iter().any(|conversation| conversation.id() == first.id()));
+    assert!(conversations.iter().any(|conversation| conversation.id() == second.id()));
+}
+
+#[tokio::test]
+async fn remove_conversations_removes_all() {
+    let server = server();
+    let first = conversation(*CryptoIdentity::new().id());
+    let second = conversation(*CryptoIdentity::new().id());
+    server.put_conversation(&first).await.unwrap();
+    server.put_conversation(&second).await.unwrap();
+
+    server
+        .remove_conversations(&[*first.id(), *second.id()])
+        .await
+        .unwrap();
+
+    assert!(server.conversation(first.id()).await.is_none());
+    assert!(server.conversation(second.id()).await.is_none());
+}
+
+#[tokio::test]
+async fn clear_conversations_clears_one_conversation() {
+    let server = server();
+    let first = conversation(*CryptoIdentity::new().id());
+    let second = conversation(*CryptoIdentity::new().id());
+    server.put_conversation(&first).await.unwrap();
+    server.put_conversation(&second).await.unwrap();
+
+    server.clear_conversations(first.id()).await.unwrap();
+
+    assert!(server.conversation(first.id()).await.is_none());
+    assert!(server.conversation(second.id()).await.is_some());
+}

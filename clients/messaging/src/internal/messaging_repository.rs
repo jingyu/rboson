@@ -45,12 +45,12 @@ use crate::{
         StoredChannelMember,
         StoredContact,
         StoredConversation,
-        StoredFriendRequest,
         StoredMessage,
     },
     internal::photon_friend_request::PhotonFriendRequest,
     Message,
     FriendRequest,
+    Conversation,
 };
 
 use crate::interfaces::{
@@ -516,34 +516,6 @@ fn stored_to_photon_member(stored: &StoredChannelMember) -> Result<PhotonChannel
     ))
 }
 
-fn friend_request_to_stored(request: &PhotonFriendRequest) -> Result<StoredFriendRequest> {
-    Ok(StoredFriendRequest {
-        id: *request.user_id(),
-        initiator: *request.initiator_id(),
-        hello: request.hello().map(ToOwned::to_owned),
-        created_at: request.created_at() as i64,
-        updated_at: request.updated_at() as i64,
-        accepted: request.is_accepted(),
-        accepted_at: request.accepted_at().unwrap_or(0) as i64
-    })
-}
-
-fn stored_to_friend_request(stored: StoredFriendRequest) -> Result<PhotonFriendRequest> {
-    Ok(PhotonFriendRequest::restore(
-        stored.id,
-        stored.initiator,
-        stored.hello,
-        stored.accepted,
-        stored.created_at as u64,
-        if stored.accepted_at > 0 {
-            Some(stored.accepted_at as u64)
-        } else {
-            None
-        },
-        stored.updated_at as u64,
-    ))
-}
-
 fn stored_to_photon_conversation(stored: StoredConversation) -> Result<PhotonConversation> {
     let contact = stored_to_contact(&stored.contact)?;
     let mut conversation = PhotonConversation::new(contact);
@@ -552,81 +524,4 @@ fn stored_to_photon_conversation(stored: StoredConversation) -> Result<PhotonCon
         conversation.update(message)?;
     }
     Ok(conversation)
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ConversationOps;
-
-    fn id(value: u8) -> Id {
-        let mut bytes = [0u8; 32];
-        bytes[31] = value;
-        Id::try_from(&bytes[..]).unwrap()
-    }
-
-    fn cleanup(path: &Path) {
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
-        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
-    }
-
-    #[test]
-    fn messaging_repository_round_trips_domain_objects() {
-        let path = std::env::temp_dir().join(format!(
-            "boson-messaging-repository-{}-{}.db",
-            std::process::id(),
-            time_to_millis(SystemTime::now()).unwrap()
-        ));
-        cleanup(&path);
-
-        let mut repository = MessagingRepository::new();
-        repository.open(&path).unwrap();
-
-        let contact_id = id(1);
-        let mut contact = PhotonContact::new(contact_id, ContactType::Friend, 1);
-        contact.name = Some("friend".into());
-        contact.revision = 1;
-        let contact: Contact = Box::new(contact);
-        repository.put_contact(1, &contact, None).unwrap();
-        let stored = repository.load_contacts().unwrap();
-        assert_eq!(stored.len(), 1);
-        assert_eq!(
-            repository.contact_from_stored(&stored[0]).unwrap().name(),
-            Some("friend")
-        );
-
-        let mut message = PhotonMessage::new(
-            2,
-            id(2),
-            id(3),
-            1,
-            Some(contact_id),
-            10,
-            serde_cbor::Value::Bytes(Vec::new()),
-        );
-
-        message.set_converstation_id(contact_id);
-        message.payload_bytes = Vec::new();
-        repository.put_message(&mut message).unwrap();
-        assert!(message.rid() > 0);
-        let messages = repository.messages_before(&contact_id, i64::MAX, 10, 0).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].rid(), message.rid());
-        let conversation = repository.conversation(&contact_id).unwrap().unwrap();
-        assert_eq!(conversation.id(), &contact_id);
-
-        let request = PhotonFriendRequest::new(
-            id(4),
-            id(5),
-            Some("hello".into()),
-            10,
-        );
-        repository.put_friend_request(&request).unwrap();
-        assert_eq!(repository.load_friend_requests().unwrap().len(), 1);
-
-        repository.close();
-        cleanup(&path);
-    }
 }

@@ -1,6 +1,9 @@
 use super::prelude::*;
 
-use crate::FriendRequest;
+use crate::{
+    FriendRequest,
+    Conversation
+};
 
 pub(crate) struct RpcServer {
     pub(super) options: Arc<Options>,

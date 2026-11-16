@@ -20,7 +20,6 @@
 
 mod channel;
 mod contact;
-mod conversation;
 mod message;
 mod message_originated;
 
@@ -31,7 +30,6 @@ pub use {
 
     contact::Contact as ContactOps,
     contact::ContactEditor as ContactEditorOps,
-    conversation::Conversation as ConversationOps,
 
     message::Message as MessageOps,
     message::MessageContent as MessageContentOps,

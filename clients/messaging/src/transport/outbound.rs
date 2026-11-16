@@ -32,53 +32,6 @@ impl MemberUpdate {
 }
 
 impl RpcServer {
-    pub(crate) async fn get_conversation(
-        &self,
-        id: &Id
-    ) -> Result<Option<PhotonConversation>> {
-        let cache = self.conversations_cache.lock().unwrap();
-        if let Some(c) = cache.get(id).cloned() {
-            return Ok(Some(c));
-        }
-        let c = self.repository.borrow_mut().conversation(id)?;
-        if let Some(conversation) = c.clone() {
-            self.conversations_cache
-                .lock()
-                .unwrap()
-                .insert(*id, conversation);
-        }
-        Ok(c)
-    }
-
-    pub(crate) async fn get_conversations(&self) -> Result<Vec<PhotonConversation>> {
-        let stored = self.repository.borrow_mut().load_conversations()?;
-        let mut cache = self.conversations_cache.lock().unwrap();
-        for item in stored {
-            cache.entry(*item.id()).or_insert(item);
-        }
-
-        let mut values = cache.values().cloned().collect::<Vec<_>>();
-        values.sort_by(|l, r| {
-            l.updated_at()
-                .cmp(&r.updated_at())
-                .then_with(|| l.id().cmp(r.id()))
-        });
-        Ok(values)
-    }
-
-    pub(crate) async fn remove_conversations(&self, ids: &[Id]) -> Result<()> {
-        for id in ids {
-            self.repository
-                .borrow_mut()
-                .remove_messages_in_conversation(id)?;
-        }
-        let mut cache = self.conversations_cache.lock().unwrap();
-        for id in ids {
-            cache.remove(id);
-        }
-        Ok(())
-    }
-
     /// Reads a page of history. Not implemented yet.
     pub(crate) async fn get_messages(
         &self,

@@ -18,6 +18,28 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::ConversationOps;
+use std::time::SystemTime;
 
-pub type Conversation = Box<dyn ConversationOps>;
+use boson_api::{Result, Id};
+use crate::interfaces::ContactOps;
+
+/// A conversation between the local user and another party (person or channel).
+///
+pub trait Conversation: Send + Sync {
+    /// The unique identifier of this conversation (same as the participant's `Id`).
+    fn id(&self) -> &Id;
+
+    /// The contact representing the other participant.
+    fn contact(&self) -> &Box<dyn ContactOps>;
+
+    /// Whether this is a channel (group) conversation.
+    fn is_channel(&self) -> bool;
+
+    /// Short text preview of the most recent activity.
+    fn preview(&self) -> Result<Option<&str>>;
+
+    /// When this conversation was last updated.
+    fn updated_at(&self) -> Option<SystemTime>;
+}
+
+pub type BoxedConversation = Box<dyn Conversation>;

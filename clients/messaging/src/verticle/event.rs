@@ -22,9 +22,10 @@ use std::collections::HashMap;
 
 use boson_api::Id;
 use crate::{
+    Conversation,
     channel::{Channel, Permission, Role},
     contact::Contact,
-    conversation::Conversation,
+    internal::photon_conversation::PhotonConversation,
     internal::photon_friend_request::PhotonFriendRequest,
     invite_ticket::InviteTicket,
     message::Message,
@@ -46,7 +47,7 @@ impl<Input, Output> Body<Input, Output> {
 pub(crate) enum Event {
     Start(Body<(), ()>),
     Stop(Body<(), ()>),
-    GetConversations(Body<Option<Id>, Vec<Conversation>>),
+    GetConversations(Body<Option<Id>, Vec<PhotonConversation>>),
     RemoveConversations(Body<Vec<Id>, ()>),
     GetMessages(Body<MsgPaginationParams, Vec<Message>>),
     RemoveMessages(Body<MsgIdsParams, ()>),

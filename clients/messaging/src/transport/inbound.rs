@@ -174,7 +174,7 @@ impl RpcServer {
                 self.on_handshake(Topic::UserInbox, message, &from).await
             }
             MessageType::Content  => {
-                self.on_inbox_content_message(message, &from)
+                self.on_inbox_content_message(message, &from).await
             }
             MessageType::Control  => {
                 warn!("Ignoring control message from user inbox");
@@ -191,7 +191,7 @@ impl RpcServer {
                 self.on_handshake(Topic::UserOutbox, message, &from).await
             }
             MessageType::Content => {
-                self.on_outbox_content_message(message, from);
+                self.on_outbox_content_message(message, from).await;
             }
             _ => {
                 warn!("Ignoring unsupported message type from user outbox");
@@ -213,20 +213,20 @@ impl RpcServer {
             .ok();
     }
 
-    fn on_inbox_content_message(&self, message: PhotonMessage, from: &Id) {
+    async fn on_inbox_content_message(&self, message: PhotonMessage, from: &Id) {
         if from == self.user_id() {
             warn!("Ignoring content message from user inbox that was sent by this user");
             return;
         }
-        self.process_incoming_content_message(message, *from);
+        self.process_incoming_content_message(message, *from).await;
     }
 
-    fn on_outbox_content_message(&self, message: PhotonMessage, from: &Id) {
+    async fn on_outbox_content_message(&self, message: PhotonMessage, from: &Id) {
         if from != self.user_id() {
             warn!("Outbox message has an unexpected sender");
             return;
         }
-        self.process_outgoing_content_message(message, *from);
+        self.process_outgoing_content_message(message, *from).await;
     }
 
     fn try_on_device_inbox_message(&self, message: PhotonMessage, from: &Id) -> Result<()> {
@@ -1130,7 +1130,7 @@ impl RpcServer {
         self.contact_listener.on_contact_added(&contact);
     }
 
-    fn process_incoming_content_message(
+    async fn process_incoming_content_message(
         &self,
         mut message: PhotonMessage,
         from: Id
@@ -1191,17 +1191,20 @@ impl RpcServer {
             warn!("Persisting inbound message failed: {error}");
         }
         let boxed_message: Message = Box::new(message.clone());
-        if let Err(error) = update_conversation(
-            &self.conversations_cache.shared(),
-            conversation_contact,
-            boxed_message.clone(),
-        ) {
+        let mut conversation = match self.conversation(&contact_id).await {
+            Some(conversation) => conversation,
+            None => crate::internal::photon_conversation::PhotonConversation::new(conversation_contact),
+        };
+        if let Err(error) = conversation.update(boxed_message.clone()) {
             warn!("Failed to update conversation: {error}");
+        }
+        if let Err(error) = self.put_conversation(&conversation).await {
+            warn!("Failed to store conversation: {error}");
         }
         self.message_listener.on_message(&boxed_message);
     }
 
-    fn process_outgoing_content_message(&self, mut message: PhotonMessage, from: Id) {
+    async fn process_outgoing_content_message(&self, mut message: PhotonMessage, from: Id) {
 
         let contact_id = *message.recipient();
         let content_bytes = message.payload_bytes.clone();
@@ -1245,12 +1248,15 @@ impl RpcServer {
             warn!("Persisting outbound message failed: {error}");
         }
         let boxed_message: Message = Box::new(message.clone());
-        if let Err(error) = update_conversation(
-            &self.conversations_cache.shared(),
-            conversation_contact,
-            boxed_message.clone(),
-        ) {
+        let mut conversation = match self.conversation(&contact_id).await {
+            Some(conversation) => conversation,
+            None => crate::internal::photon_conversation::PhotonConversation::new(conversation_contact),
+        };
+        if let Err(error) = conversation.update(boxed_message.clone()) {
             warn!("Failed to update conversation: {error}");
+        }
+        if let Err(error) = self.put_conversation(&conversation).await {
+            warn!("Failed to store conversation: {error}");
         }
         self.message_listener.on_sent(&boxed_message);
     }

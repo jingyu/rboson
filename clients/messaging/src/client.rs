@@ -43,7 +43,6 @@ use crate::{
     ConnectionListener,
     contact::Contact,
     ContactListener,
-    conversation::Conversation,
     FriendRequestListener,
     invite_ticket::InviteTicket,
     message::{ Message, MessageBuilder},
@@ -53,6 +52,7 @@ use crate::{
     SessionListener,
     MessagingClient,
     BoxedFriendRequest,
+    BoxedConversation,
 };
 
 use crate::internal::{
@@ -396,13 +396,21 @@ impl Client {
 
 #[cfg_attr(doc, doc = "Conversations API")]
 impl Client {
-    pub async fn conversation(&self, id: &Id) -> Result<Option<Conversation>> {
-        let conversations = self.verticle_client()?.get_conversations(Some(*id)).await?;
-        Ok(conversations.into_iter().next())
+    pub async fn conversation(&self, id: &Id) -> Result<Option<BoxedConversation>> {
+        Ok(self.verticle_client()?
+            .get_conversations(Some(*id))
+            .await?
+            .into_iter()
+            .next()
+            .map(Into::into)
+        )
     }
 
-    pub async fn conversations(&self) -> Result<Vec<Conversation>> {
-        self.verticle_client()?.get_conversations(None).await
+    pub async fn conversations(&self) -> Result<Vec<BoxedConversation>> {
+        Ok(self.verticle_client()?
+            .get_conversations(None)
+            .await?
+            .into_iter().map(Into::into).collect())
     }
 
     pub async fn remove_conversation(&self, id: &Id) -> Result<()> {
@@ -858,11 +866,11 @@ impl MessagingClient for Client {
         self.message(recipient)
     }
 
-    async fn conversation(&self, id: &Id) -> Result<Option<Conversation>> {
+    async fn conversation(&self, id: &Id) -> Result<Option<BoxedConversation>> {
         self.conversation(id).await
     }
 
-    async fn conversations(&self) -> Result<Vec<Conversation>> {
+    async fn conversations(&self) -> Result<Vec<BoxedConversation>> {
         self.conversations().await
     }
 

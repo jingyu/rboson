@@ -34,7 +34,7 @@ use boson_api::{
     errors::{Result, StateError},
 };
 use crate::{
-    conversation::Conversation,
+    Conversation,
     message::Message,
 };
 
@@ -84,17 +84,13 @@ pub(super) fn handle(
             respond(pending, promise, async move {
                 match id {
                     Some(id) => Ok(rpc
-                        .get_conversation(&id)
-                        .await?
-                        .map(|conversation| Box::new(conversation) as Conversation)
+                        .conversation(&id)
+                        .await
                         .into_iter()
-                        .collect()),
+                        .collect::<Vec<_>>()),
                     None => Ok(rpc
-                        .get_conversations()
-                        .await?
-                        .into_iter()
-                        .map(|conversation| Box::new(conversation) as Conversation)
-                        .collect()),
+                        .conversations()
+                        .await)
                 }
             });
         }

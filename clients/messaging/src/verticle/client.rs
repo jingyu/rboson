@@ -31,6 +31,7 @@ use crate::{
     channel::{Permission, Role, Channel},
     contact::Contact,
     conversation::Conversation,
+    internal::photon_conversation::PhotonConversation,
     internal::photon_friend_request::PhotonFriendRequest,
     invite_ticket::InviteTicket,
     Message,
@@ -109,7 +110,7 @@ impl VerticleClient {
         Ok(())
     }
 
-    pub(crate) async fn get_conversations(&self, id: Option<Id>) -> Result<Vec<Conversation>> {
+    pub(crate) async fn get_conversations(&self, id: Option<Id>) -> Result<Vec<PhotonConversation>> {
         let make_event = |promise| {
             Event::GetConversations(Body::new(id, promise))
         };

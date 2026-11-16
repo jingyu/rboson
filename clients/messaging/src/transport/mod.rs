@@ -45,6 +45,7 @@ use crate::{
     channel::Channel,
     contact::Contact,
     internal::session_context::SessionContext,
+    internal::PhotonConversation,
     Conversation,
     FriendRequest,
 };
@@ -218,12 +219,84 @@ impl RpcServer {
             .flatten()
     }
 
-    pub(crate) async fn conversation(&self, id: &Id) -> Option<Conversation> {
+    pub(crate) async fn conversation(&self, id: &Id) -> Option<PhotonConversation> {
+        if let Some(conversation) = self.conversations_cache.borrow().get(id).cloned() {
+            return Some(conversation);
+        }
+
+        match self.repository.borrow_mut().conversation(id) {
+            Ok(Some(conversation)) => {
+                self.conversations_cache
+                    .borrow_mut()
+                    .insert(*id, conversation.clone());
+                Some(conversation)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                warn!("Failed to load conversation {id}: {error}");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn conversations(&self) -> Vec<PhotonConversation> {
+        let stored = match self.repository.borrow_mut().load_conversations() {
+            Ok(conversations) => conversations,
+            Err(error) => {
+                warn!("Failed to load conversations: {error}");
+                Vec::new()
+            }
+        };
+
+        {
+            let mut cache = self.conversations_cache.borrow_mut();
+            for conversation in &stored {
+                cache.insert(*conversation.id(), conversation.clone());
+            }
+        }
+
+        let mut conversations = self
+            .conversations_cache
+            .borrow()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        conversations.sort_by(|left, right| {
+            left.updated_at()
+                .cmp(&right.updated_at())
+                .then_with(|| left.id().cmp(right.id()))
+        });
+        conversations
+    }
+
+    pub(crate) async fn put_conversation(&self, conversation: &PhotonConversation) -> Result<()> {
         self.conversations_cache
-            .get(id, |repository, id| repository.conversation(id))
-            .ok()
-            .flatten()
-            .map(|conversation| Box::new(conversation) as Conversation)
+            .borrow_mut()
+            .insert(*conversation.id(), conversation.clone());
+        Ok(())
+    }
+
+    pub(crate) async fn remove_conversation(&self, id: &Id) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .remove_messages_in_conversation(id)?;
+        self.conversations_cache.borrow_mut().remove(id);
+        Ok(())
+    }
+
+    pub(crate) async fn remove_conversations(&self, ids: &[Id]) -> Result<()> {
+        for id in ids {
+            self.remove_conversation(id).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn clear_conversations(&self, id: &Id) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .remove_messages_in_conversation(id)?;
+        self.conversations_cache.borrow_mut().remove(id);
+        Ok(())
     }
 
     pub(crate) async fn put_channel(&self, channel: &Channel) -> Result<()> {
