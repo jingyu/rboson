@@ -10,7 +10,6 @@ use crate::internal::{
 use crate::interfaces::{
     MessageOps,
     MessageOriginated,
-    ChannelOps,
 };
 use crate::rpc::response::RpcResponse;
 use crate::{
@@ -271,11 +270,10 @@ impl RpcServer {
     }
 
     async fn process_notification(&self, payload: &[u8], from: &Id) -> Result<()> {
-        let notif = serde_cbor::from_slice::<Notification>(payload)
+        let notif = Notification::deserialize(payload)
                 .map_err(|e| EncodingError::new(
                     &format!("Malformed notification: {e}")
                 ))?;
-
 
         if notif.source() == self.user_id()
                 && notif.is_originated(self.device_id())
@@ -856,7 +854,7 @@ impl RpcServer {
         let timestamp = message.created_at_u64() as i64;
         let originated_here = match Self::message_id(self.device_id(), timestamp) {
             Ok(id) => MessageOps::id(&message) == &id,
-            Err(error) => {
+            Err(_) => {
                 return Err(StateError::new("Failed to derive handshake message id").into());
             }
         };

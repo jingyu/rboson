@@ -254,7 +254,7 @@ impl MessagingRepository {
 
     pub(crate) fn put_friend_request(&mut self, request: &PhotonFriendRequest) -> Result<()> {
         self.store
-            .put_friend_request(&friend_request_to_stored(request)?)
+            .put_friend_request(request)
     }
 
     pub(crate) fn remove_friend_request(&mut self, user_id: &Id) -> Result<bool> {
@@ -267,17 +267,12 @@ impl MessagingRepository {
 
     pub(crate) fn load_friend_requests(&mut self) -> Result<Vec<PhotonFriendRequest>> {
         self.store
-            .get_friend_requests()?
-            .into_iter()
-            .map(stored_to_friend_request)
-            .collect()
+            .get_friend_requests()
     }
 
-    pub(crate) fn load_friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>> {
+    pub(crate) fn friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>> {
         self.store
-            .get_friend_request(user_id)?
-            .map(stored_to_friend_request)
-            .transpose()
+            .get_friend_request(user_id)
     }
 
     pub(crate) fn load_contacts(&mut self) -> Result<Vec<StoredContact>> {

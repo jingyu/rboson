@@ -53,7 +53,6 @@ use crate::{
     SessionListener,
     MessagingClient,
     BoxedFriendRequest,
-    FriendRequest,
 };
 
 use crate::internal::{

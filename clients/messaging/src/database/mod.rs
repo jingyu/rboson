@@ -28,6 +28,8 @@ use std::path::Path;
 
 use boson_api::{Id, Result};
 
+use crate::internal::PhotonFriendRequest;
+
 pub(crate) mod database;
 
 #[derive(Debug, Clone)]
@@ -138,9 +140,9 @@ pub(crate) trait MessagingStore {
     fn remove_messages_by_conversation(&mut self, conversation_id: &Id) -> Result<bool>;
     fn clear_messages(&mut self) -> Result<()>;
 
-    fn put_friend_request(&mut self, request: &StoredFriendRequest) -> Result<()>;
-    fn get_friend_request(&mut self, user_id: &Id) -> Result<Option<StoredFriendRequest>>;
-    fn get_friend_requests(&mut self) -> Result<Vec<StoredFriendRequest>>;
+    fn put_friend_request(&mut self, request: &PhotonFriendRequest) -> Result<()>;
+    fn get_friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>>;
+    fn get_friend_requests(&mut self) -> Result<Vec<PhotonFriendRequest>>;
     fn remove_friend_request(&mut self, user_id: &Id) -> Result<bool>;
     fn remove_friend_requests(&mut self, user_ids: &[Id]) -> Result<bool>;
     fn clear_friend_requests(&mut self) -> Result<()>;

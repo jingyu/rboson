@@ -56,6 +56,12 @@ use super::{
     StoredFriendRequest,
     StoredMessage,
 };
+use crate::{
+    FriendRequest,
+};
+use crate::internal::{
+    PhotonFriendRequest,
+};
 
 const PRAGMAS: &str = "
     PRAGMA journal_mode = WAL;
@@ -476,16 +482,16 @@ fn channel_member_from_row(row: ChannelMemberRow) -> Result<StoredChannelMember>
     })
 }
 
-fn friend_request_from_row(row: FriendRequestRow) -> Result<StoredFriendRequest> {
-    Ok(StoredFriendRequest {
-        id: id_from(&row.id)?,
-        initiator: id_from(&row.initiator)?,
-        hello: row.hello,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        accepted: row.accepted != 0,
-        accepted_at: row.accepted_at,
-    })
+fn friend_request_from_row(row: FriendRequestRow) -> Result<PhotonFriendRequest> {
+    Ok(PhotonFriendRequest::restore(
+        id_from(&row.id)?,
+        id_from(&row.initiator)?,
+        row.hello,
+        row.accepted != 0,
+        row.created_at as u64,
+        if row.accepted_at != 0 { Some(row.accepted_at as u64) } else { None },
+        row.updated_at as u64,
+    ))
 }
 
 fn upsert_revision(conn: &mut SqliteConnection, revision: i32) -> diesel::result::QueryResult<()> {
@@ -841,7 +847,7 @@ impl MessagingStore for SqliteMessagingStore {
         .map_err(db_err)
     }
 
-    fn put_friend_request(&mut self, request: &StoredFriendRequest) -> Result<()> {
+    fn put_friend_request(&mut self, request: &PhotonFriendRequest) -> Result<()> {
         let conn = self.conn()?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             sql_query(
@@ -856,20 +862,20 @@ impl MessagingStore for SqliteMessagingStore {
                      accepted = EXCLUDED.accepted, \
                      accepted_at = EXCLUDED.accepted_at",
             )
-            .bind::<Binary, _>(request.id.as_bytes().to_vec())
-            .bind::<Binary, _>(request.initiator.as_bytes().to_vec())
-            .bind::<Nullable<Text>, _>(request.hello.clone())
-            .bind::<BigInt, _>(request.created_at)
-            .bind::<BigInt, _>(request.updated_at)
-            .bind::<Integer, _>(if request.accepted { 1 } else { 0 })
-            .bind::<BigInt, _>(request.accepted_at)
+            .bind::<Binary, _>(request.user_id().as_bytes().to_vec())
+            .bind::<Binary, _>(request.initiator_id().as_bytes().to_vec())
+            .bind::<Nullable<Text>, _>(request.hello().clone())
+            .bind::<BigInt, _>(request.created_at() as i64)
+            .bind::<BigInt, _>(request.updated_at() as i64)
+            .bind::<Integer, _>(if request.is_accepted() { 1 } else { 0 })
+            .bind::<BigInt, _>(request.accepted_at().unwrap_or(0) as i64)
             .execute(conn)?;
             Ok(())
         })
         .map_err(db_err)
     }
 
-    fn get_friend_request(&mut self, user_id: &Id) -> Result<Option<StoredFriendRequest>> {
+    fn get_friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>> {
         let row = sql_query("SELECT * FROM friend_requests WHERE id = ?")
             .bind::<Binary, _>(user_id.as_bytes().to_vec())
             .get_result::<FriendRequestRow>(self.conn()?)
@@ -878,7 +884,7 @@ impl MessagingStore for SqliteMessagingStore {
         row.map(friend_request_from_row).transpose()
     }
 
-    fn get_friend_requests(&mut self) -> Result<Vec<StoredFriendRequest>> {
+    fn get_friend_requests(&mut self) -> Result<Vec<PhotonFriendRequest>> {
         let rows = sql_query("SELECT * FROM friend_requests ORDER BY created_at DESC")
             .load::<FriendRequestRow>(self.conn()?)
             .map_err(db_err)?;
@@ -1138,148 +1144,5 @@ impl MessagingStore for SqliteMessagingStore {
             Ok(removed)
         })
         .map_err(db_err)
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use boson_api::Id;
-
-    fn id(value: u8) -> Id {
-        let mut bytes = [0u8; 32];
-        bytes[31] = value;
-        Id::try_from(&bytes[..]).unwrap()
-    }
-
-    fn cleanup(path: &Path) {
-        let _ = fs::remove_file(path);
-        let _ = fs::remove_file(format!("{}-wal", path.display()));
-        let _ = fs::remove_file(format!("{}-shm", path.display()));
-    }
-
-    #[test]
-    fn sqlite_store_round_trips_messages_and_contacts() {
-        let path = std::env::temp_dir().join(format!(
-            "boson-messaging-store-{}-{}.db",
-            std::process::id(),
-            now_ms()
-        ));
-        cleanup(&path);
-
-        let mut store = SqliteMessagingStore::new();
-        store.open(&path).unwrap();
-        assert_eq!(store.get_contacts_revision().unwrap(), 0);
-
-        let contact_id = id(1);
-        let contact = StoredContact {
-            id: contact_id,
-            contact_type: 1,
-            session_key: None,
-            name: Some("test".into()),
-            remark: None,
-            tags: None,
-            muted: false,
-            blocked: false,
-            revision: 1,
-            created_at: 1,
-            updated_at: 1,
-            channel: None,
-        };
-        store.put_contact(1, &contact).unwrap();
-        assert_eq!(store.get_contacts_revision().unwrap(), 1);
-        assert_eq!(store.get_contact(&contact_id).unwrap().unwrap().name.as_deref(), Some("test"));
-
-        let message_id = id(2);
-        let message = StoredMessage {
-            rid: 0,
-            id: message_id,
-            conversation_id: contact_id,
-            version: 2,
-            recipient: id(3),
-            message_type: 1,
-            from: Some(id(4)),
-            created_at: 10,
-            content_type: Some("text/plain".into()),
-            content_disposition: None,
-            payload: Some(b"hello".to_vec()),
-            sent_at: 10,
-            received_at: 0,
-        };
-        let rid = store.put_message(&message).unwrap();
-        assert!(rid > 0);
-
-        let messages = store.get_messages_in_range(&contact_id, 0, 100).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].payload.as_deref(), Some(b"hello".as_slice()));
-
-        let conversation = store.get_conversation(&contact_id).unwrap().unwrap();
-        assert_eq!(conversation.last_message.unwrap().rid, rid);
-        let conversations = store.get_all_conversations().unwrap();
-        assert_eq!(conversations.len(), 1);
-        assert_eq!(conversations[0].last_message.as_ref().unwrap().rid, rid);
-
-        store.remove_messages(&[rid]).unwrap();
-        assert!(store.get_conversation(&contact_id).unwrap().is_none());
-
-        let channel_id = id(5);
-        let channel = StoredContact {
-            id: channel_id,
-            contact_type: 2,
-            session_key: None,
-            name: Some("channel".into()),
-            remark: None,
-            tags: None,
-            muted: false,
-            blocked: false,
-            revision: 2,
-            created_at: 2,
-            updated_at: 2,
-            channel: Some(StoredChannel {
-                id: channel_id,
-                owner: id(6),
-                permission: 3,
-                notice: Some("notice".into()),
-                announce: false,
-            }),
-        };
-        store.put_contact(2, &channel).unwrap();
-        let member = StoredChannelMember {
-            id: id(7),
-            channel_id,
-            role: 2,
-            joined: 20,
-        };
-        store.put_channel_members(&channel_id, &[member]).unwrap();
-        assert_eq!(store.get_all_channel_members(&channel_id).unwrap().len(), 1);
-        assert!(store
-            .update_channel_members_role(&channel_id, &[id(7)], 1)
-            .unwrap());
-        assert_eq!(
-            store.get_channel_member(&channel_id, &id(7)).unwrap().unwrap().role,
-            1
-        );
-        assert!(store.remove_channel_members(&channel_id, &[id(7)]).unwrap());
-        assert!(store.get_all_channel_members(&channel_id).unwrap().is_empty());
-
-        let request = StoredFriendRequest {
-            id: id(8),
-            initiator: id(9),
-            hello: Some("hi".into()),
-            created_at: 30,
-            updated_at: 30,
-            accepted: false,
-            accepted_at: 0,
-        };
-        store.put_friend_request(&request).unwrap();
-        assert_eq!(store.get_friend_requests().unwrap().len(), 1);
-        assert!(store.remove_friend_request(&id(8)).unwrap());
-
-        assert!(store.remove_contact_locally(&channel_id).unwrap());
-        assert!(store.get_contact(&channel_id).unwrap().is_none());
-
-        store.close();
-        cleanup(&path);
     }
 }

@@ -252,7 +252,7 @@ impl RpcServer {
             return Some(request);
         }
 
-        match self.repository.borrow_mut().load_friend_request(id) {
+        match self.repository.borrow_mut().friend_request(id) {
             Ok(Some(request)) => {
                 self.friend_requests_cache
                     .borrow_mut()
