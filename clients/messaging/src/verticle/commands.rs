@@ -163,8 +163,8 @@ pub(super) fn handle(
         Event::GetFriendRequests(Body {params: id, result: promise}) => {
             respond(pending, promise, async move {
                 match id {
-                    Some(user_id) => Ok(rpc.get_friend_request(&user_id).await?.into_iter().collect()),
-                    None => rpc.get_friend_requests().await,
+                    Some(user_id) => Ok(rpc.friend_request(&user_id).await.into_iter().collect()),
+                    None => Ok(rpc.friend_requests().await)
                 }
             });
         }

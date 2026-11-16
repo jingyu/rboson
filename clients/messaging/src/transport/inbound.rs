@@ -270,7 +270,6 @@ impl RpcServer {
         self.process_notification(payload, from).await
     }
 
-
     async fn process_notification(&self, payload: &[u8], from: &Id) -> Result<()> {
         let notif = serde_cbor::from_slice::<Notification>(payload)
                 .map_err(|e| EncodingError::new(
@@ -961,10 +960,10 @@ impl RpcServer {
             Some(hello.clone()),
             created_at,
         );
-        if let Err(error) = self.repository.borrow_mut().put_friend_request(&request) {
-            warn!("Persisting friend request failed: {error}");
+
+        if let Err(error) = self.put_friend_request(&request).await {
+            warn!("{error}");
         }
-        self.friend_requests_cache.borrow_mut().insert(user_id, request);
 
         if notify {
             self.friend_request_listener
@@ -972,11 +971,11 @@ impl RpcServer {
         }
     }
 
-    pub(super) fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<PhotonFriendRequest> {
-        let requests = self.friend_requests_cache.borrow();
-        let request = requests
-            .get(user_id)
-            .ok_or_else(|| ArgumentError::new(format!("No friend request found for {user_id}")))?;
+    pub(super) async fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<PhotonFriendRequest> {
+        let Some(request) = self.friend_request(user_id).await else {
+            return Err(ArgumentError::new(format!("No friend request found for {user_id}")));
+        };
+
         if self.contacts_cache.borrow().get(user_id).is_some_and(|contact| {
             contact.is_blocked() || contact.contact_type() == ContactType::Channel
         }) {
@@ -1040,12 +1039,8 @@ impl RpcServer {
         is_inbox: bool,
     ) {
         let _request = self.requests.lock().await;
-        if self
-            .friend_requests_cache
-            .borrow()
-            .get(&friend_id)
-            .is_some_and(|request| request.is_accepted())
-        {
+
+        if self.friend_request(&friend_id).await.is_some_and(|request| request.is_accepted()) {
             debug!("Ignoring duplicate friend request acceptance from {friend_id}");
             return;
         }
@@ -1054,9 +1049,12 @@ impl RpcServer {
         } else {
             friend_id
         };
-        let request = match self.pending_friend_request(&friend_id, &initiator_id) {
+        let request = match self.pending_friend_request(&friend_id, &initiator_id).await {
             Ok(req) => req,
-            Err(_) => return,
+            Err(error) => {
+                warn!("Failed to find pending friend request for {friend_id}: {error}");
+                return;
+            }
         };
         if (timestamp as u64)< request.created_at() {
             warn!("Friend request acceptance predates the request");
@@ -1064,10 +1062,7 @@ impl RpcServer {
         }
         let session_identity = match CryptoIdentity::try_from(session_key.as_slice()) {
             Ok(identity) => identity,
-            Err(error) => {
-                warn!("Invalid friend session key: {error}");
-                return;
-            }
+            Err(_) => return,
         };
         if let Err(error) = self.store_friend_contact(&friend_id, &session_identity).await {
             warn!("Failed to store friend contact: {error}");
@@ -1078,39 +1073,37 @@ impl RpcServer {
             .unwrap()
             .entry(friend_id)
             .or_insert_with(|| self.session_context(friend_id, session_identity, false));
-        self.on_friend_request_accepted(friend_id, timestamp as i64, is_inbox);
+        self.on_friend_request_accepted(friend_id, timestamp as i64, is_inbox).await;
     }
 
-    pub(super) fn on_friend_request_accepted(&self, user_id: Id, timestamp: i64, notify: bool) {
+    pub(super) async fn on_friend_request_accepted(&self, user_id: Id, timestamp: i64, notify: bool) {
         if timestamp < 0 {
             warn!("Ignoring friend request acceptance from {user_id} with a negative timestamp");
             return;
         }
 
-        let accepted_at = timestamp as u64;
-        {
-            let mut requests = self.friend_requests_cache.borrow_mut();
-            let Some(request) = requests.get_mut(&user_id) else {
-                return;
-            };
-            if request.is_accepted() || request.is_expired() {
-                return;
-            }
-            let initiator_id = if notify {
-                self.user_identity.id()
-            } else {
-                &user_id
-            };
-            if request.initiator_id() != initiator_id || accepted_at < request.created_at() {
-                warn!("Ignoring friend request acceptance from {user_id} that does not match the pending request");
-                return;
-            }
-            request.accept(accepted_at);
+        let Some(mut request) = self.friend_request(&user_id).await else {
+            return;
+        };
+
+        if request.is_accepted() || request.is_expired() {
+            return;
         }
-        if let Some(request) = self.friend_requests_cache.borrow().get(&user_id).cloned() {
-            if let Err(error) = self.repository.borrow_mut().put_friend_request(&request) {
-                warn!("Persisting accepted friend request failed: {error}");
-            }
+        let initiator_id = if notify {
+            self.user_identity.id()
+        } else {
+            &user_id
+        };
+
+        let accepted_at = timestamp as u64;
+        if request.initiator_id() != initiator_id || accepted_at < request.created_at() {
+            warn!("Ignoring friend request acceptance from {user_id} that does not match the pending request");
+            return;
+        }
+
+        request.accept(accepted_at);
+        if let Err(error) = self.put_friend_request(&request).await {
+            warn!("Persisting accepted friend request failed: {error}");
         }
 
         if self

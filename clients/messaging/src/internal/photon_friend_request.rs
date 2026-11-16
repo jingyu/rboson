@@ -68,7 +68,15 @@ impl PhotonFriendRequest {
         hello: Option<String>,
         created_at: u64,
     ) -> Self {
-        Self::with_times(user_id, initiator_id, hello, created_at, created_at)
+        Self {
+            user_id,
+            initiator_id,
+            hello,
+            accepted: false,
+            created_at,
+            accepted_at: None,
+            updated_at: created_at,
+        }
     }
 
     /// Creates a record for a request received in a handshake.
@@ -79,32 +87,14 @@ impl PhotonFriendRequest {
         sent_at: u64,
         now: u64,
     ) -> Self {
-        Self::with_times(
-            user_id,
-            initiator_id,
-            hello,
-            Self::not_in_the_future(sent_at, now),
-            now,
-        )
-    }
-
-    fn with_times(
-        user_id: Id,
-        initiator_id: Id,
-        hello: Option<String>,
-        created_at: u64,
-        updated_at: u64,
-    ) -> Self {
-        // let created_at = boson_api::as_ms!(created_at) as u64;
-        // let updated_at = boson_api::as_ms!(updated_at) as u64;
         Self {
             user_id,
             initiator_id,
             hello,
             accepted: false,
-            created_at,
+            created_at: Self::not_in_the_future(sent_at, now),
             accepted_at: None,
-            updated_at,
+            updated_at: now,
         }
     }
 
@@ -185,28 +175,14 @@ impl FriendRequest for PhotonFriendRequest {
     }
 }
 
-impl From<PhotonFriendRequest> for BoxedFriendRequest {
-    fn from(request: PhotonFriendRequest) -> Self {
-        Box::new(request)
+impl Into<BoxedFriendRequest> for PhotonFriendRequest {
+    fn into(self) -> BoxedFriendRequest {
+        Box::new(self)
     }
 }
 
-impl From<Box<PhotonFriendRequest>> for BoxedFriendRequest {
-    fn from(request: Box<PhotonFriendRequest>) -> Self {
-        request
-    }
-}
-
-impl From<BoxedFriendRequest> for PhotonFriendRequest {
-    fn from(request: BoxedFriendRequest) -> Self {
-        Self::restore(
-            *request.user_id(),
-            *request.initiator_id(),
-            request.hello().map(ToString::to_string),
-            request.is_accepted(),
-            boson_api::as_ms!(request.created()) as u64,
-            request.accepted().map(|value| boson_api::as_ms!(value) as u64),
-            boson_api::as_ms!(request.updated()) as u64,
-        )
+impl Into<BoxedFriendRequest> for Box<PhotonFriendRequest> {
+    fn into(self) -> BoxedFriendRequest {
+        self
     }
 }

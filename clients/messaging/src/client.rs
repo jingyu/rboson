@@ -533,22 +533,33 @@ impl Client {
                 "Cannot accept friend request from yourself",
             ));
         }
-        self.verticle_client()?.friend_accept(user_id).await.map_err(|e| e.into())
+        self.verticle_client()?
+            .friend_accept(user_id)
+            .await
+            .map_err(|e| e.into())
     }
 
     /// Looks up a single pending friend request.
     pub async fn get_friend_request(&self, user_id: Id) -> Result<Option<BoxedFriendRequest>> {
-        self.verticle_client()?.get_friend_request(user_id).await.map(|request| request.map(Into::into))
+        self.verticle_client()?
+            .get_friend_request(user_id)
+            .await
+            .map(|v| v.map(Into::into))
     }
 
     /// Lists every pending friend request.
     pub async fn get_friend_requests(&self) -> Result<Vec<BoxedFriendRequest>> {
-        self.verticle_client()?.get_friend_requests().await.map(|requests| requests.into_iter().map(Into::into).collect())
+        self.verticle_client()?
+            .get_friend_requests()
+            .await
+            .map(|v| v.into_iter().map(Into::into).collect())
     }
 
     /// Dismisses a pending friend request without accepting it.
     pub async fn remove_friend_request(&self, user_id: Id) -> Result<()> {
-        self.verticle_client()?.remove_friend_request(user_id).await
+        self.verticle_client()?
+            .remove_friend_request(user_id)
+            .await
     }
 
     /// Dismisses several pending friend requests in one round trip.
@@ -563,7 +574,9 @@ impl Client {
 
     /// Dismisses every pending friend request.
     pub async fn clear_friend_requests(&self) -> Result<()> {
-        self.verticle_client()?.clear_friend_requests().await
+        self.verticle_client()?
+            .clear_friend_requests()
+            .await
     }
 
     /// Registers an existing friend together with their session key.

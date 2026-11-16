@@ -273,6 +273,13 @@ impl MessagingRepository {
             .collect()
     }
 
+    pub(crate) fn load_friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>> {
+        self.store
+            .get_friend_request(user_id)?
+            .map(stored_to_friend_request)
+            .transpose()
+    }
+
     pub(crate) fn load_contacts(&mut self) -> Result<Vec<StoredContact>> {
         self.store.get_all_contacts()
     }

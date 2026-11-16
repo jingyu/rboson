@@ -218,18 +218,6 @@ impl RpcServer {
             .flatten()
     }
 
-    pub(crate) async fn friend_request(&self, id: &Id) -> Option<PhotonFriendRequest> {
-        self.friend_requests_cache
-            .get(id, |repository, id| {
-                Ok(repository
-                    .load_friend_requests()?
-                    .into_iter()
-                    .find(|request| request.user_id() == id))
-            })
-            .ok()
-            .flatten()
-    }
-
     pub(crate) async fn conversation(&self, id: &Id) -> Option<Conversation> {
         self.conversations_cache
             .get(id, |repository, id| repository.conversation(id))
@@ -258,6 +246,79 @@ impl RpcServer {
         self.contacts_cache.borrow_mut().remove(channel_id);
         self.session_contexts.lock().unwrap().remove(channel_id);
     }
+
+    pub(crate) async fn friend_request(&self, id: &Id) -> Option<PhotonFriendRequest> {
+        if let Some(request) = self.friend_requests_cache.borrow().get(id).cloned() {
+            return Some(request);
+        }
+
+        match self.repository.borrow_mut().load_friend_request(id) {
+            Ok(Some(request)) => {
+                self.friend_requests_cache
+                    .borrow_mut()
+                    .insert(*id, request.clone());
+                Some(request)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                warn!("Failed to load friend request {id}: {error}");
+                None
+            }
+        }
+    }
+
+    pub(crate) async fn friend_requests(&self) -> Vec<PhotonFriendRequest> {
+        match self.repository.borrow_mut().load_friend_requests() {
+            Ok(requests) => {
+                let mut cache = self.friend_requests_cache.borrow_mut();
+                for request in &requests {
+                    cache.insert(*request.user_id(), request.clone());
+                }
+                requests
+            }
+            Err(error) => {
+                warn!("Failed to load friend requests: {error}");
+                self.friend_requests_cache
+                    .borrow()
+                    .values()
+                    .cloned()
+                    .collect()
+            }
+        }
+    }
+
+    pub(crate) async fn put_friend_request(&self, request: &PhotonFriendRequest) -> Result<()> {
+       // let revision = self.contacts_revision.get();
+        self.repository
+            .borrow_mut()
+            .put_friend_request(request)?;
+        self.friend_requests_cache
+            .borrow_mut()
+            .insert(*request.user_id(), request.clone());
+        Ok(())
+    }
+
+    pub(crate) async fn remove_friend_request(&self, user_id: &Id) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .remove_friend_request(user_id)?;
+
+        let _ = self.friend_requests_cache.borrow_mut().remove(user_id);
+        Ok(())
+    }
+
+    pub(crate) async fn remove_friend_requests(&self, user_ids: &[Id]) -> Result<()> {
+        for user_id in user_ids {
+            self.remove_friend_request(user_id).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn clear_friend_request(&self) -> Result<()> {
+        self.repository.borrow_mut().clear_friend_requests()?;
+        self.friend_requests_cache.borrow_mut().clear();
+        Ok(())
+    }
 }
 
 mod prelude;
@@ -268,3 +329,7 @@ mod inbound;
 mod outbound;
 mod mqtt;
 pub(crate) use rpc_server::RpcServer;
+
+#[cfg(test)]
+#[path = "../unitests/test_transport.rs"]
+mod test_transport;

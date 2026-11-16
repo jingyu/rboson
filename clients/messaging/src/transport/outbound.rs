@@ -169,14 +169,12 @@ impl RpcServer {
             hello,
             timestamp as u64,
         );
-        self.repository.borrow_mut().put_friend_request(&request)?;
-        self.friend_requests_cache.borrow_mut().insert(*user_id, request);
+        self.put_friend_request(&request).await?;
         Ok(())
     }
 
     pub(crate) async fn accept_friend_request(&self, user_id: &Id) -> Result<()> {
-        let request = self.friend_requests_cache.borrow().get(user_id).cloned();
-        let Some(request) = request else {
+        let Some(request) = self.friend_request(user_id).await else {
             return Err(StateError::new(
                 format!("No friend request found for {user_id}")
             ));
@@ -224,47 +222,7 @@ impl RpcServer {
             self.session_context(*user_id, session_identity, false),
         );
 
-        self.on_friend_request_accepted(*user_id, timestamp, false);
-        Ok(())
-    }
-
-    pub(crate) async fn get_friend_request(
-        &self,
-        user_id: &Id
-    ) -> Result<Option<PhotonFriendRequest>> {
-        Ok(
-            self.friend_requests_cache.borrow()
-                .get(user_id)
-                .cloned()
-        )
-    }
-
-    pub(crate) async fn get_friend_requests(&self) -> Result<Vec<PhotonFriendRequest>> {
-        Ok(
-            self.friend_requests_cache.borrow()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        )
-    }
-
-    pub(crate) async fn remove_friend_requests(&self, user_ids: &[Id]) -> Result<()> {
-        for user_id in user_ids {
-            self.repository
-                .borrow_mut()
-                .remove_friend_request(user_id)?;
-        }
-
-        let mut borrowed_mut = self.friend_requests_cache.borrow_mut();
-        for user_id in user_ids {
-            borrowed_mut.remove(user_id);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn _clear_friend_requests(&self) -> Result<()> {
-        self.repository.borrow_mut().clear_friend_requests()?;
-        self.friend_requests_cache.borrow_mut().clear();
+        self.on_friend_request_accepted(*user_id, timestamp, false).await;
         Ok(())
     }
 
