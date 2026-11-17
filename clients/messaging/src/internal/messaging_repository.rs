@@ -43,7 +43,6 @@ use crate::{
         MessagingStore,
         StoredChannel,
         StoredChannelMember,
-        StoredContact,
         StoredConversation,
         StoredMessage,
     },
@@ -152,20 +151,23 @@ impl MessagingRepository {
     pub(crate) fn put_contact(
         &mut self,
         revision: i32,
-        contact: &Contact,
+        contact: &PhotonContact,
         session_key: Option<&[u8]>,
     ) -> Result<()> {
-        let stored = contact_to_stored(contact, session_key);
-        self.store.put_contact(revision, &stored)
+        //let stored = contact_to_stored(contact, session_key);
+        self.store.put_contact(revision, contact)
     }
 
     pub(crate) fn put_contact_locally(
         &mut self,
-        contact: &Contact,
+        contact: &PhotonContact,
         session_key: Option<&[u8]>,
     ) -> Result<()> {
-        let stored = contact_to_stored(contact, session_key);
-        self.store.put_contact_locally(&stored)
+        let mut contact = contact.clone();
+        if let Some(session_key) = session_key {
+            contact.set_session_key(Some(session_key.to_vec()));
+        }
+        self.store.put_contact_locally(&contact)
     }
 
     pub(crate) fn remove_contact(&mut self, revision: i32, contact_id: &Id) -> Result<bool> {
@@ -190,7 +192,7 @@ impl MessagingRepository {
         channel: &Channel,
         session_key: &[u8],
     ) -> Result<()> {
-        let stored = channel_to_stored(channel, session_key);
+        let stored = channel_to_photon(channel, session_key);
         self.store.put_contact(revision, &stored)?;
         let members: Vec<StoredChannelMember> = channel
             .members()
@@ -275,16 +277,16 @@ impl MessagingRepository {
             .get_friend_request(user_id)
     }
 
-    pub(crate) fn load_contacts(&mut self) -> Result<Vec<StoredContact>> {
+    pub(crate) fn load_contacts(&mut self) -> Result<Vec<PhotonContact>> {
         self.store.get_all_contacts()
     }
 
-    pub(crate) fn contact_from_stored(&self, stored: &StoredContact) -> Result<Contact> {
-        stored_to_contact(stored)
+    pub(crate) fn contact_from_stored(&self, stored: &PhotonContact) -> Result<Contact> {
+        Ok(Box::new(stored.clone()))
     }
 
-    pub(crate) fn photon_contact_from_stored(&self, stored: &StoredContact) -> Result<PhotonContact> {
-        stored_to_photon_contact(stored)
+    pub(crate) fn photon_contact_from_stored(&self, stored: &PhotonContact) -> Result<PhotonContact> {
+        Ok(stored.clone())
     }
 
     pub(crate) fn channel_members(&mut self, channel_id: &Id) -> Result<Vec<ChannelMember>> {
@@ -329,21 +331,6 @@ impl MessagingRepository {
             .map(stored_to_photon_conversation)
             .transpose()
     }
-}
-
-fn time_to_millis(time: SystemTime) -> Result<i64> {
-    let millis = time
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| StateError::new(format!("Invalid message timestamp: {error}")))?
-        .as_millis();
-    i64::try_from(millis)
-        .map_err(|_| StateError::new("Message timestamp is out of range").into())
-}
-
-fn millis_to_time(millis: i64) -> Result<SystemTime> {
-    let millis = u64::try_from(millis)
-        .map_err(|_| StateError::new("Invalid negative message timestamp"))?;
-    Ok(UNIX_EPOCH + Duration::from_millis(millis))
 }
 
 fn message_to_stored(message: &PhotonMessage) -> Result<StoredMessage> {
@@ -429,65 +416,51 @@ fn stored_to_message(stored: StoredMessage) -> Result<PhotonMessage> {
     Ok(message)
 }
 
-fn contact_to_stored(contact: &Contact, session_key: Option<&[u8]>) -> StoredContact {
-    StoredContact {
-        id: *contact.id(),
-        contact_type: contact.contact_type() as i32,
-        session_key: session_key.map(|key| key.to_vec()),
-        name: contact.name().map(ToOwned::to_owned),
-        remark: contact.remark().map(ToOwned::to_owned),
-        tags: contact.tags().map(ToOwned::to_owned),
-        muted: contact.is_muted(),
-        blocked: contact.is_blocked(),
-        revision: contact.revision(),
-        created_at: contact.created_at(),
-        updated_at: contact.updated_at(),
-        channel: None,
-    }
-}
-
-fn channel_to_stored(channel: &Channel, session_key: &[u8]) -> StoredContact {
-    StoredContact {
-        id: *channel.id(),
-        contact_type: ContactType::Channel as i32,
-        session_key: Some(session_key.to_vec()),
-        name: channel.name().map(ToOwned::to_owned),
-        remark: channel.remark().map(ToOwned::to_owned),
-        tags: channel.tags().map(ToOwned::to_owned),
-        muted: channel.is_muted(),
-        blocked: channel.is_blocked(),
-        revision: channel.revision(),
-        created_at: channel.created_at(),
-        updated_at: channel.updated_at(),
-        channel: Some(StoredChannel {
-            id: *channel.id(),
-            owner: *channel.owner(),
-            permission: channel.permission() as i32,
-            notice: channel.notice().map(ToOwned::to_owned),
-            announce: channel.is_announced(),
-        }),
-    }
-}
-
-fn stored_to_contact(stored: &StoredContact) -> Result<Contact> {
-    Ok(Box::new(stored_to_photon_contact(stored)?))
-}
-
-fn stored_to_photon_contact(stored: &StoredContact) -> Result<PhotonContact> {
-    let mut data = ContactData::new(
-        stored.id,
-        u8::try_from(stored.contact_type)
-            .map_err(|_| StateError::new("Invalid contact type"))?,
-        stored.created_at,
+fn contact_to_photon(contact: &Contact, session_key: Option<&[u8]>) -> PhotonContact {
+    let mut photon = PhotonContact::new(
+        *contact.id(),
+        contact.contact_type(),
+        contact.created_at(),
     );
-    data.name = stored.name.clone();
-    data.remark = stored.remark.clone();
-    data.tags = stored.tags.clone();
-    data.muted = stored.muted;
-    data.blocked = stored.blocked;
-    data.updated_at = stored.updated_at;
-    data.revision = stored.revision;
-    PhotonContact::try_from(data)
+    photon.name = contact.name().map(ToOwned::to_owned);
+    photon.remark = contact.remark().map(ToOwned::to_owned);
+    photon.tags = contact.tags().map(ToOwned::to_owned);
+    photon.muted = contact.is_muted();
+    photon.blocked = contact.is_blocked();
+    photon.revision = contact.revision();
+    photon.updated_at = contact.updated_at();
+    if let Some(session_key) = session_key {
+        photon.set_session_key(Some(session_key.to_vec()));
+    }
+    photon
+}
+
+fn channel_to_photon(channel: &Channel, session_key: &[u8]) -> PhotonContact {
+    let mut contact = PhotonContact::new(
+        *channel.id(),
+        ContactType::Channel,
+        channel.created_at(),
+    );
+    contact.name = channel.name().map(ToOwned::to_owned);
+    contact.remark = channel.remark().map(ToOwned::to_owned);
+    contact.tags = channel.tags().map(ToOwned::to_owned);
+    contact.muted = channel.is_muted();
+    contact.blocked = channel.is_blocked();
+    contact.revision = channel.revision();
+    contact.updated_at = channel.updated_at();
+    contact.set_session_key(Some(session_key.to_vec()));
+    contact.channel = Some(StoredChannel {
+        id: *channel.id(),
+        owner: *channel.owner(),
+        permission: channel.permission() as i32,
+        notice: channel.notice().map(ToOwned::to_owned),
+        announce: channel.is_announced(),
+    });
+    contact
+}
+
+fn stored_to_contact(stored: &PhotonContact) -> Result<Contact> {
+    Ok(Box::new(stored.clone()))
 }
 
 fn member_to_stored(channel_id: &Id, member: &ChannelMember) -> StoredChannelMember {

@@ -51,12 +51,12 @@ use super::{
     MessagingStore,
     StoredChannel,
     StoredChannelMember,
-    StoredContact,
     StoredConversation,
     StoredMessage,
 };
 use crate::{
     FriendRequest,
+    internal::PhotonContact,
 };
 use crate::internal::{
     PhotonFriendRequest,
@@ -396,7 +396,7 @@ fn message_from_row(row: MessageRow) -> Result<StoredMessage> {
     })
 }
 
-fn contact_from_row(row: ContactRow) -> Result<StoredContact> {
+fn contact_from_row(row: ContactRow) -> Result<PhotonContact> {
     let channel = if row.contact_type == 2 {
         Some(StoredChannel {
             id: id_from(&row.id)?,
@@ -415,9 +415,9 @@ fn contact_from_row(row: ContactRow) -> Result<StoredContact> {
         None
     };
 
-    Ok(StoredContact {
+    Ok(PhotonContact {
         id: id_from(&row.id)?,
-        contact_type: row.contact_type,
+        contact_type: row.contact_type as u8,
         session_key: row.session_key,
         name: row.name,
         remark: row.remark,
@@ -509,7 +509,7 @@ fn upsert_revision(conn: &mut SqliteConnection, revision: i32) -> diesel::result
 
 fn put_contact_row(
     conn: &mut SqliteConnection,
-    contact: &StoredContact,
+    contact: &PhotonContact,
 ) -> diesel::result::QueryResult<()> {
     sql_query(
         "INSERT INTO contacts \
@@ -527,8 +527,8 @@ fn put_contact_row(
              updated_at = EXCLUDED.updated_at",
     )
     .bind::<Binary, _>(contact.id.as_bytes().to_vec())
-    .bind::<Integer, _>(contact.contact_type)
-    .bind::<Nullable<Binary>, _>(contact.session_key.clone())
+    .bind::<Integer, _>(contact.contact_type as i32)
+    .bind::<Nullable<Binary>, _>(contact.session_key().clone())
     .bind::<Nullable<Text>, _>(contact.name.clone())
     .bind::<Nullable<Text>, _>(contact.remark.clone())
     .bind::<Nullable<Text>, _>(contact.tags.clone())
@@ -619,7 +619,7 @@ impl MessagingStore for SqliteMessagingStore {
         Ok(row.map(|row| row.revision).unwrap_or(0))
     }
 
-    fn put_contact(&mut self, revision: i32, contact: &StoredContact) -> Result<()> {
+    fn put_contact(&mut self, revision: i32, contact: &PhotonContact) -> Result<()> {
         let conn = self.conn()?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             put_contact_row(conn, contact)?;
@@ -629,7 +629,7 @@ impl MessagingStore for SqliteMessagingStore {
         .map_err(db_err)
     }
 
-    fn put_contacts(&mut self, revision: i32, contacts: &[StoredContact]) -> Result<()> {
+    fn put_contacts(&mut self, revision: i32, contacts: &[PhotonContact]) -> Result<()> {
         let conn = self.conn()?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| {
             for contact in contacts {
@@ -641,7 +641,7 @@ impl MessagingStore for SqliteMessagingStore {
         .map_err(db_err)
     }
 
-    fn put_contact_locally(&mut self, contact: &StoredContact) -> Result<()> {
+    fn put_contact_locally(&mut self, contact: &PhotonContact) -> Result<()> {
         let conn = self.conn()?;
         conn.transaction::<_, diesel::result::Error, _>(|conn| put_contact_row(conn, contact))
             .map_err(db_err)
@@ -693,7 +693,7 @@ impl MessagingStore for SqliteMessagingStore {
         .map_err(db_err)
     }
 
-    fn get_contact(&mut self, contact_id: &Id) -> Result<Option<StoredContact>> {
+    fn get_contact(&mut self, contact_id: &Id) -> Result<Option<PhotonContact>> {
         let sql = format!("{CONTACT_SELECT} WHERE c.id = ?");
         let row = sql_query(sql)
             .bind::<Binary, _>(contact_id.as_bytes().to_vec())
@@ -703,7 +703,7 @@ impl MessagingStore for SqliteMessagingStore {
         row.map(contact_from_row).transpose()
     }
 
-    fn get_contacts(&mut self, contact_ids: &[Id]) -> Result<Vec<StoredContact>> {
+    fn get_contacts(&mut self, contact_ids: &[Id]) -> Result<Vec<PhotonContact>> {
         if contact_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -716,7 +716,7 @@ impl MessagingStore for SqliteMessagingStore {
         Ok(contacts)
     }
 
-    fn get_all_contacts(&mut self) -> Result<Vec<StoredContact>> {
+    fn get_all_contacts(&mut self) -> Result<Vec<PhotonContact>> {
         let rows = sql_query(CONTACT_SELECT)
             .load::<ContactRow>(self.conn()?)
             .map_err(db_err)?;

@@ -16,6 +16,8 @@ use std::rc::Rc;
 
 use crate::{
     internal::{photon_friend_request::PhotonFriendRequest, verticle::VerticleOptions},
+    ChannelOps,
+    ContactOps,
     options::OptionsBuilder,
 };
 
@@ -200,4 +202,136 @@ async fn clear_conversations_clears_one_conversation() {
 
     assert!(server.conversation(first.id()).await.is_none());
     assert!(server.conversation(second.id()).await.is_some());
+}
+
+fn contact(user_id: Id) -> Contact {
+    let mut contact = crate::internal::photon_contact::PhotonContact::new(user_id, crate::contact::ContactType::Friend, 1);
+    contact.set_revision(1);
+    Box::new(contact) as Contact
+}
+
+#[tokio::test]
+async fn contact_put_get_and_remove() {
+    let server = server();
+    let user_id = *CryptoIdentity::new().id();
+    let contact = contact(user_id);
+
+    server.put_contact(&contact).await.unwrap();
+
+    let loaded = server.contact(&user_id).await.unwrap();
+    assert_eq!(*loaded.id(), user_id);
+    assert_eq!(loaded.contact_type(), crate::contact::ContactType::Friend);
+
+    server.remove_contact(&user_id).await;
+    assert!(server.contact(&user_id).await.is_none());
+    assert!(server.contacts().await.is_empty());
+}
+
+#[tokio::test]
+async fn contacts_merge_repository_and_cache() {
+    let server = server();
+    let first = contact(*CryptoIdentity::new().id());
+    let second = contact(*CryptoIdentity::new().id());
+
+    server.put_contacts(&[first.clone(), second.clone()]).await.unwrap();
+
+    let contacts = server.contacts().await;
+    assert_eq!(contacts.len(), 2);
+    assert!(contacts.iter().any(|contact| contact.id() == first.id()));
+    assert!(contacts.iter().any(|contact| contact.id() == second.id()));
+}
+
+fn channel(user_id: Id, owner: Id, session_id: Id) -> Channel {
+    let contact = crate::internal::photon_contact::PhotonContact::new(
+        user_id,
+        crate::contact::ContactType::Channel,
+        1,
+    );
+    let channel = crate::internal::PhotonChannel::new(
+        contact,
+        owner,
+        session_id,
+        crate::channel::Permission::Public,
+        None,
+        false,
+        Vec::new(),
+    );
+    Box::new(channel)
+}
+
+fn install_channel(server: &RpcServer, channel: &Channel) {
+    let session = CryptoIdentity::new();
+    server.session_contexts.lock().unwrap().insert(
+        *channel.id(),
+        server.session_context(*channel.id(), session, true),
+    );
+}
+
+#[tokio::test]
+async fn channel_put_get_and_remove() {
+    let server = server();
+    let user_id = *CryptoIdentity::new().id();
+    let owner = *CryptoIdentity::new().id();
+    let session_id = *CryptoIdentity::new().id();
+    let channel = channel(user_id, owner, session_id);
+    install_channel(&server, &channel);
+
+    server.put_channel(&channel).await.unwrap();
+
+    let loaded = server.channel(&user_id).await.unwrap();
+    assert_eq!(*loaded.id(), user_id);
+    assert_eq!(*loaded.owner(), owner);
+
+    server.remove_channel(&user_id).await;
+    assert!(server.channel(&user_id).await.is_none());
+    assert!(server.channels().await.is_empty());
+}
+
+#[tokio::test]
+async fn channels_lists_cached_channels() {
+    let server = server();
+    let first = channel(
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+    );
+    let second = channel(
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+    );
+    install_channel(&server, &first);
+    install_channel(&server, &second);
+    server.put_channel(&first).await.unwrap();
+    server.put_channel(&second).await.unwrap();
+
+    let channels = server.channels().await;
+    assert_eq!(channels.len(), 2);
+    assert!(channels.iter().any(|channel| channel.id() == first.id()));
+    assert!(channels.iter().any(|channel| channel.id() == second.id()));
+}
+
+#[tokio::test]
+async fn remove_channels_clears_cached_channels() {
+    let server = server();
+    let first = channel(
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+    );
+    let second = channel(
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+        *CryptoIdentity::new().id(),
+    );
+    install_channel(&server, &first);
+    install_channel(&server, &second);
+    server.put_channel(&first).await.unwrap();
+    server.put_channel(&second).await.unwrap();
+
+    server.remove_channels().await;
+
+    assert!(server.channels().await.is_empty());
+    assert!(server.channel(first.id()).await.is_none());
+    assert!(server.channel(second.id()).await.is_none());
 }

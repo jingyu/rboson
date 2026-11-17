@@ -29,6 +29,7 @@ use boson_api::{
     utils,
 };
 use crate::{
+    internal::PhotonContact,
     contact::{Contact, ContactType},
     errors::{AuthenticationError, EncodingError}
 };
@@ -121,11 +122,10 @@ impl ContactData {
         self.session_key.as_deref()
     }
 
-    /// Materialises a public [`Contact`] with the revision from the envelope.
-    pub(crate) fn contact(&self, revision: i32) -> Result<Contact> {
+    pub(crate) fn contact(&self, revision: i32) -> Result<PhotonContact> {
         let mut data = self.clone();
         data.revision = revision;
-        Ok(Box::new(super::PhotonContact::try_from(data)?) as Contact)
+        Ok(super::PhotonContact::try_from(data)?)
     }
 
     /// Decrypts and parses the session identity, if this contact has one.

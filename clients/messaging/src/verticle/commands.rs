@@ -34,7 +34,6 @@ use boson_api::{
     errors::{Result, StateError},
 };
 use crate::{
-    Conversation,
     message::Message,
 };
 
@@ -44,8 +43,10 @@ use super::{
     promise::Promise,
     event::{
         Event, Body,
-        OPERATE_SET_MEMBER_ROLE, OPERATE_BAN_MEMBERS,
-        OPERATE_UNBAN_MEMBERS, OPERATE_REMOVE_MEMBERS,
+        OPERATE_SET_MEMBER_ROLE,
+        OPERATE_BAN_MEMBERS,
+        OPERATE_UNBAN_MEMBERS,
+        OPERATE_REMOVE_MEMBERS,
     },
 };
 
@@ -216,7 +217,7 @@ pub(super) fn handle(
             result: promise,
         }) => {
             respond(pending, promise, async move {
-                rpc.remove_channel(&channel_id).await
+                rpc.delete_channel(&channel_id).await
             });
         }
 

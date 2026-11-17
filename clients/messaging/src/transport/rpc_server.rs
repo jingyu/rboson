@@ -174,20 +174,20 @@ impl RpcServer {
         let mut sessions = HashMap::new();
         let mut channels = HashMap::new();
         for stored in stored_contacts {
-            let session = match stored.session_key.as_deref() {
+            let session = match stored.session_key() {
                 Some(key) => {
                     let key = self.user_identity.decrypt_into(self.user_id(), key)?;
                     let identity = CryptoIdentity::try_from(key.as_slice())?;
                     Some(self.session_context(
                         stored.id,
                         identity,
-                        stored.contact_type == ContactType::Channel as i32,
+                        stored.contact_type == ContactType::Channel as u8,
                     ))
                 }
                 None => None,
             };
 
-            if stored.contact_type == ContactType::Channel as i32 {
+            if stored.contact_type == ContactType::Channel as u8 {
                 let Some(session) = session else {
                     warn!("Skipping persisted channel {} without a session key", stored.id);
                     continue;

@@ -49,29 +49,15 @@ pub(crate) struct StoredMessage {
     pub(crate) received_at: i64,
 }
 
-#[derive(Debug, Clone)]
+use crate::internal::photon_contact::PhotonContact;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredChannel {
     pub(crate) id: Id,
     pub(crate) owner: Id,
     pub(crate) permission: i32,
     pub(crate) notice: Option<String>,
     pub(crate) announce: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct StoredContact {
-    pub(crate) id: Id,
-    pub(crate) contact_type: i32,
-    pub(crate) session_key: Option<Vec<u8>>,
-    pub(crate) name: Option<String>,
-    pub(crate) remark: Option<String>,
-    pub(crate) tags: Option<String>,
-    pub(crate) muted: bool,
-    pub(crate) blocked: bool,
-    pub(crate) revision: i32,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
-    pub(crate) channel: Option<StoredChannel>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +70,7 @@ pub(crate) struct StoredChannelMember {
 
 #[derive(Debug, Clone)]
 pub(crate) struct StoredConversation {
-    pub(crate) contact: StoredContact,
+    pub(crate) contact: PhotonContact,
     pub(crate) last_message: Option<StoredMessage>,
 }
 
@@ -95,16 +81,16 @@ pub(crate) trait MessagingStore {
     fn is_open(&self) -> bool;
 
     fn get_contacts_revision(&mut self) -> Result<i32>;
-    fn put_contact(&mut self, revision: i32, contact: &StoredContact) -> Result<()>;
-    fn put_contacts(&mut self, revision: i32, contacts: &[StoredContact]) -> Result<()>;
-    fn put_contact_locally(&mut self, contact: &StoredContact) -> Result<()>;
+    fn put_contact(&mut self, revision: i32, contact: &PhotonContact) -> Result<()>;
+    fn put_contacts(&mut self, revision: i32, contacts: &[PhotonContact]) -> Result<()>;
+    fn put_contact_locally(&mut self, contact: &PhotonContact) -> Result<()>;
     fn remove_contact_locally(&mut self, contact_id: &Id) -> Result<bool>;
     fn remove_contact(&mut self, revision: i32, contact_id: &Id) -> Result<bool>;
     fn remove_contacts(&mut self, revision: i32, contact_ids: &[Id]) -> Result<bool>;
     fn clear_contacts(&mut self, revision: i32) -> Result<()>;
-    fn get_contact(&mut self, contact_id: &Id) -> Result<Option<StoredContact>>;
-    fn get_contacts(&mut self, contact_ids: &[Id]) -> Result<Vec<StoredContact>>;
-    fn get_all_contacts(&mut self) -> Result<Vec<StoredContact>>;
+    fn get_contact(&mut self, contact_id: &Id) -> Result<Option<PhotonContact>>;
+    fn get_contacts(&mut self, contact_ids: &[Id]) -> Result<Vec<PhotonContact>>;
+    fn get_all_contacts(&mut self) -> Result<Vec<PhotonContact>>;
     fn exists_contact(&mut self, contact_id: &Id) -> Result<bool>;
 
     fn put_message(&mut self, message: &StoredMessage) -> Result<i64>;

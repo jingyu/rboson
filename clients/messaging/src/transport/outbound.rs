@@ -147,11 +147,9 @@ impl RpcServer {
         }
 
         if self
-            .contacts_cache
-            .borrow()
-            .get(user_id)
-            .map(|v| v.is_blocked() || v.contact_type() == ContactType::Channel)
-            .unwrap_or(false)
+            .contact(user_id)
+            .await
+            .is_some_and(|contact| contact.is_blocked() || contact.contact_type() == ContactType::Channel)
         {
             return Err(StateError::new(
                 "Cannot accept a friend request from a blocked user or channel",
@@ -223,13 +221,14 @@ impl RpcServer {
         self.contacts_revision.set(confirmed);
 
         // 5. Apply the confirmed change to the local state.
-        let contact = data.contact(confirmed)?;
+        let contact = Box::new(data.contact(confirmed)?) as Contact;
         self.session_contexts.lock().unwrap().insert(
             *user_id,
             self.session_context(*user_id, session_identity, false),
         );
-        self.contacts_cache.borrow_mut().insert(*user_id, contact.clone());
-        self.persist_contact(&contact, data.session_key())?;
+        self.put_contact(&contact).await?;
+       // self.contacts_cache.borrow_mut().insert(*user_id, contact.clone());
+       // self.persist_contact(&contact, data.session_key())?;
 
         // 6. Notify the application.
         self.contact_listener.on_contact_added(&contact);
@@ -242,7 +241,9 @@ impl RpcServer {
         // - the user is a known,
         // - not yet blocked,
         // - non-channel contact.
-        let contact = self.contact_snapshot(user_id)?;
+        let Some(contact) = self.contact(user_id).await else {
+            return Err(StateError::new(format!("Contact {user_id} does not exist")).into());
+        };
         if contact.contact_type() == ContactType::Channel {
             return Err(ArgumentError::new("A channel cannot be blocked as a user").into());
         }
@@ -285,10 +286,12 @@ impl RpcServer {
         self.contacts_revision.set(confirmed);
 
         // 5. Apply the confirmed change to the local state.
-        let blocked = data.contact(confirmed)?;
-        self.contacts_cache.borrow_mut().insert(*user_id, blocked.clone());
+        let blocked = Box::new(data.contact(confirmed)?) as Contact;
+        // self.contacts_cache.borrow_mut().insert(*user_id, blocked.clone());
+        //self.persist_contact(&blocked, data.session_key())?;
+        self.put_contact(&blocked).await?;
         self.blocked_contacts.lock().unwrap().insert(*user_id);
-        self.persist_contact(&blocked, data.session_key())?;
+
 
         // 6. Notify the application.
         self.contact_listener
@@ -338,7 +341,7 @@ impl RpcServer {
         Ok(channel)
     }
 
-    pub(crate) async fn remove_channel(&self, channel_id: &Id) -> Result<()> {
+    pub(crate) async fn delete_channel(&self, channel_id: &Id) -> Result<()> {
         let channel = self.channel_snapshot(channel_id)?;
         if channel.owner() != self.user_id() {
             return Err(StateError::new("Only the owner can delete the channel"));
@@ -504,15 +507,6 @@ impl RpcServer {
             .ok_or_else(|| StateError::new(format!("Channel {id} does not exist")).into())
     }
 
-    fn contact_snapshot(&self, id: &Id) -> Result<Contact> {
-        let contact = self.contacts_cache.borrow().get(id).cloned();
-        if let Some(contact) = &contact {
-            Ok(contact.clone())
-        } else {
-            Err(StateError::new(format!("Contact {id} does not exist")).into())
-        }
-    }
-
     fn decode_channel_info(&self, info: ChannelInfo) -> Result<(Channel, SessionContext)> {
         self.channel_from_info(&info)
     }
@@ -626,12 +620,7 @@ impl RpcServer {
             .await?;
 
         self.channels_cache.borrow_mut().remove(id);
-        self.contacts_cache.borrow_mut().remove(id);
-        self.session_contexts.lock().unwrap().remove(id);
-
-        self.repository
-            .borrow_mut()
-            .remove_contact(self.contacts_revision.get(), id)?;
+        self.remove_contact(id).await;
 
         self.contact_listener.on_contacts_removed(&[*id]);
         Ok(())
@@ -922,20 +911,14 @@ impl RpcServer {
         &self,
         id_opt: Option<&Id>
     ) -> Result<Vec<Contact>> {
-        let borrowed = self.contacts_cache.borrow();
-
         Ok(match id_opt {
-            Some(id) => borrowed.get(id).cloned().into_iter().collect(),
-            None => borrowed.values().cloned().collect(),
+            Some(id) => self.contact(id).await.into_iter().collect(),
+            None => self.contacts().await,
         })
     }
 
     pub(crate) async fn update_contact(&self, contact: &Contact) -> Result<()> {
-        let origin = self
-            .contacts_cache
-            .borrow()
-            .get(contact.id())
-            .cloned();
+        let origin = self.contact(contact.id()).await;
 
         let Some(origin) = origin else {
             return Err(StateError::new("Contact not found"));
@@ -981,7 +964,7 @@ impl RpcServer {
         if let Some(key) = &key {
             data.set_session_key(key.clone());
         }
-        let mut updated = data.contact(next_revision)?;
+        let mut updated = Box::new(data.contact(next_revision)?) as Contact;
         let opaque = if origin.contact_type() == ContactType::Channel {
             let channel = self.channel_snapshot(contact.id())?;
             let key = key.ok_or_else(|| StateError::new("Channel session key is missing"))?;
@@ -1031,43 +1014,12 @@ impl RpcServer {
             let session_key = self.persisted_session_key(updated.id()).ok();
             self.repository.borrow_mut().put_contact(
                 self.contacts_revision.get(),
-                &updated,
+                &Self::to_photon_contact(&updated)?,
                 session_key.as_deref(),
             )?;
         }
         // 6. Notify the application.
         self.contact_listener.on_contacts_updated(&[updated]);
-        Ok(())
-    }
-
-    pub(crate) async fn remove_contacts(&self, ids: &[Id]) -> Result<()> {
-        assert!(!ids.is_empty(), "No contact IDs specified");
-
-        let revision = self.contacts_revision.get();
-        let mutation = ContactMutation::remove(revision, ids.to_vec());
-        let request = RPCRequest::contact_mutate(0, mutation);
-
-        let result = self.send_control(self.peer_id(), request).await?;
-        let confirmed = match result {
-            ResponseParams::ContactMutate(confirmed) => confirmed,
-            _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
-        };
-        if confirmed < revision || confirmed < self.contacts_revision.get() {
-            return Err(StateError::new("Contact removal revision is outdated").into());
-        }
-        self.contacts_revision.set(confirmed);
-
-        for id in ids {
-            self.session_contexts.lock().unwrap().remove(id);
-            self.blocked_contacts.lock().unwrap().remove(id);
-            self.contacts_cache.borrow_mut().remove(id);
-            self.channels_cache.borrow_mut().remove(id);
-        }
-        self.repository
-            .borrow_mut()
-            .remove_contacts(confirmed, ids)?;
-
-        self.contact_listener.on_contacts_removed(ids);
         Ok(())
     }
 

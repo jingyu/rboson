@@ -44,7 +44,7 @@ pub struct PhotonContact {
     pub(crate) contact_type: u8,
 
     #[serde(rename = "sk", default, with = "utils::bytes_opt")]
-    session_key: Option<Vec<u8>>,
+    pub(crate) session_key: Option<Vec<u8>>,
 
     #[serde(
         rename = "n",
@@ -89,6 +89,9 @@ pub struct PhotonContact {
 
     #[serde(rename = "v")]
     pub(crate) revision: i32,
+
+    #[serde(skip)]
+    pub(crate) channel: Option<crate::database::StoredChannel>,
 }
 
 impl PhotonContact {
@@ -106,11 +109,16 @@ impl PhotonContact {
             muted: false,
             blocked: false,
             revision: 0,
+            channel: None,
         }
     }
 
     pub(crate) fn session_key(&self) -> Option<&[u8]> {
         self.session_key.as_deref()
+    }
+
+    pub(crate) fn set_session_key(&mut self, session_key: Option<Vec<u8>>) {
+        self.session_key = session_key;
     }
 
     pub(crate) fn set_name(&mut self, name: Option<String>) {
@@ -165,6 +173,7 @@ impl TryFrom<ContactData> for PhotonContact {
             created_at: data.created_at,
             updated_at: data.updated_at,
             revision: data.revision,
+            channel: None,
         })
     }
 }

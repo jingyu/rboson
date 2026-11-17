@@ -8,6 +8,7 @@ use crate::internal::{
 };
 
 use crate::interfaces::{
+    ContactOps,
     MessageOps,
     MessageOriginated,
 };
@@ -286,8 +287,8 @@ impl RpcServer {
         if self.peer_id() == from {
             self.process_peer_notification(notif).await
         } else {
-            let channel = match self.channel(from).await {
-                Some(c) => c,
+            let channel: Channel = match self.channel(from).await {
+                Some(c) => Box::new(c),
                 None => {
                     let Body::ChannelJoin(info) = notif.body() else {
                         return Err(StateError::new(
@@ -302,9 +303,11 @@ impl RpcServer {
                     }
 
                     self.put_channel(&self.channel_from_info(info)?.0).await?;
-                    self.channel(from).await.ok_or_else(|| {
-                        StateError::new(&format!("Failed to create channel contact for {from}"))
-                    })?
+                    self.channel(from).await
+                        .map(|channel| Box::new(channel) as Channel)
+                        .ok_or_else(|| {
+                            StateError::new(&format!("Failed to create channel contact for {from}"))
+                        })?
                 }
             };
             self.process_channel_notification(notif, &channel).await
@@ -336,11 +339,11 @@ impl RpcServer {
                 trace!("Channel {} created", channel_info.channel_id());
                 let (new_channel, _) = self.channel_from_info(channel_info)?;
 
-                let channel = match self.channel(channel_info.channel_id()).await {
+                let channel: Channel = match self.channel(channel_info.channel_id()).await {
                     Some(v) => {
                         trace!("Channel {} already exists, ignoring duplicate create channel notification",
                             channel_info.channel_id());
-                        v
+                        Box::new(v)
                     }
                     None => {
                         self.put_channel(&new_channel).await?;
@@ -376,7 +379,7 @@ impl RpcServer {
         match notif.body() {
             Body::ChannelDeletion => {
                 trace!("Channel {} deleted", channel_id);
-                self.invalidate_channel(channel.id()).await;
+                self.remove_channel(channel.id()).await;
                 self.channel_listener.on_channel_deleted(&channel);
             }
             Body::ChannelJoin(info) => {
@@ -399,7 +402,7 @@ impl RpcServer {
             }
             Body::ChannelLeave => {
                 trace!("Channel {} left", channel_id);
-                self.invalidate_channel(channel.id()).await;
+                self.remove_channel(channel.id()).await;
                 self.channel_listener.on_left_channel(channel);
             }
             Body::ChannelSessionKeyRotate(encrypted_key) => {
@@ -589,7 +592,7 @@ impl RpcServer {
     /// opaque document carries for the contact kinds that have them.
     pub(super) fn decode_contact(&self, opaque: &OpaqueContact) -> Result<DecodedContact> {
         let (data, plaintext) = opaque.decode_into(&self.user_identity)?;
-        let contact = data.contact(opaque.revision())?;
+        let contact = Box::new(data.contact(opaque.revision())?) as Contact;
         let session = data.session(&self.user_identity)?;
         let channel = match contact.contact_type() {
             ContactType::Channel => {
@@ -972,7 +975,7 @@ impl RpcServer {
             return Err(ArgumentError::new(format!("No friend request found for {user_id}")));
         };
 
-        if self.contacts_cache.borrow().get(user_id).is_some_and(|contact| {
+        if self.contact(user_id).await.is_some_and(|contact| {
             contact.is_blocked() || contact.contact_type() == ContactType::Channel
         }) {
             return Err(ArgumentError::new(
@@ -998,9 +1001,8 @@ impl RpcServer {
     /// Records a friend locally, including their session key.
     pub(super) async fn store_friend_contact(&self, user_id: &Id, session: &CryptoIdentity) -> Result<()> {
         if self
-            .contacts_cache
-            .borrow()
-            .get(user_id)
+            .contact(user_id)
+            .await
             .is_some_and(|contact| contact.contact_type() == ContactType::Friend)
         {
             return Ok(());
@@ -1020,7 +1022,7 @@ impl RpcServer {
         let mutation = ContactMutation::add(revision, data.encode_into(&self.user_identity)?);
         self.apply_contact_mutation(mutation, revision, "Friend contact revision is outdated")
             .await?;
-        if let Some(contact) = self.contacts_cache.borrow().get(user_id).cloned() {
+        if let Some(contact) = self.contact(user_id).await {
             self.persist_contact(&contact, session_key.as_deref())?;
         }
         Ok(())
@@ -1103,9 +1105,8 @@ impl RpcServer {
         }
 
         if self
-            .contacts_cache
-            .borrow()
-            .get(&user_id)
+            .contact(&user_id)
+            .await
             .is_some_and(|contact| contact.contact_type() == ContactType::Friend)
         {
             if notify {
@@ -1120,7 +1121,9 @@ impl RpcServer {
             .unwrap_or(0);
         let mut contact = Box::new(PhotonContact::new(user_id, ContactType::Friend, now_ms)) as Contact;
         contact.set_revision(self.contacts_revision.get());
-        self.contacts_cache.borrow_mut().insert(user_id, contact.clone());
+        if let Err(error) = self.put_contact(&contact).await {
+            warn!("Persisting friend contact failed: {error}");
+        }
         if notify {
             self.friend_request_listener
                 .on_friend_request_accepted(&user_id);
@@ -1138,20 +1141,14 @@ impl RpcServer {
         } else {
             from
         };
-        if self
-            .contacts_cache
-            .borrow()
-            .get(&contact_id)
-            .is_some_and(|contact| contact.is_blocked())
-        {
+        let contact = self.contact(&contact_id).await;
+        if contact.as_ref().is_some_and(|contact| contact.is_blocked()) {
             warn!("Message is from a blocked contact");
             return;
         }
         if *message.recipient() != *self.user_id()
-            && !self
-                .contacts_cache
-                .borrow()
-                .get(&contact_id)
+            && !contact
+                .as_ref()
                 .is_some_and(|contact| contact.contact_type() == ContactType::Channel)
         {
             warn!("Content message has an unexpected recipient");
@@ -1179,11 +1176,7 @@ impl RpcServer {
                 return;
             }
         };
-        let conversation_contact = self
-            .contacts_cache
-            .borrow()
-            .get(&contact_id)
-            .cloned()
+        let conversation_contact = contact
             .unwrap_or_else(|| Box::new(PhotonContact::new(contact_id, ContactType::Auto, created_at)) as Contact);
         if let Err(error) = self.repository.borrow_mut().put_message(&mut message) {
             warn!("Persisting inbound message failed: {error}");
@@ -1237,10 +1230,8 @@ impl RpcServer {
             return;
         }
         let conversation_contact = self
-            .contacts_cache
-            .borrow()
-            .get(&contact_id)
-            .cloned()
+            .contact(&contact_id)
+            .await
             .unwrap_or_else(|| Box::new(PhotonContact::new(contact_id, ContactType::Auto, created_at)) as Contact);
         if let Err(error) = self.repository.borrow_mut().put_message(&mut message) {
             warn!("Persisting outbound message failed: {error}");
