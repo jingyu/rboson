@@ -21,7 +21,7 @@
 use std::time::SystemTime;
 
 use boson_api::{Result, Id};
-use crate::interfaces::ContactOps;
+use crate::contact::BoxedContact;
 
 /// A conversation between the local user and another party (person or channel).
 ///
@@ -30,7 +30,7 @@ pub trait Conversation: Send + Sync {
     fn id(&self) -> &Id;
 
     /// The contact representing the other participant.
-    fn contact(&self) -> &Box<dyn ContactOps>;
+    fn contact(&self) -> &BoxedContact;
 
     /// Whether this is a channel (group) conversation.
     fn is_channel(&self) -> bool;

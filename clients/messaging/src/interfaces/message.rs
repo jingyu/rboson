@@ -95,17 +95,13 @@ pub trait MessageContent: Send + Sync {
     }
 
     /// The parsed content disposition, if present.
-    fn content_disposition(&self) -> Result<Option<ContentDisposition>> {
+    fn content_disposition(&self) -> Option<ContentDisposition> {
         let headers = self.headers();
         let Some(value) = headers.get(ContentDisposition::HEADER_NAME) else {
-            return Ok(None);
+            return None;
         };
-        let value = value
-            .as_str()
-            .ok_or_else(|| boson_api::errors::ArgumentError::new(
-                "Content-Disposition header must be a string",
-            ))?;
-        Ok(Some(ContentDisposition::parse(value)?))
+        let value = value.as_str()?;
+        Some(ContentDisposition::parse(value).ok()?)
     }
 
     /// The body as UTF-8 text.

@@ -110,20 +110,19 @@ impl RpcServer {
         hello: Option<String>
     ) -> Result<()> {
         assert!(user_id != self.user_identity.id());
+        info!("Sending friend request to {user_id} with hello: {:?}", hello);
 
-        info!("Sending friend request to {user_id}");
         let timestamp = self
             .send_handshake(*user_id, HandshakeType::FriendRequest(hello.clone()))
             .await?;
 
-        let request = PhotonFriendRequest::new(
+        let request = PhotonFriendRequest::create(
             *user_id,
             *self.user_identity.id(),
             hello,
             timestamp as u64,
         );
-        self.put_friend_request(&request).await?;
-        Ok(())
+        self.put_friend_request(&request).await
     }
 
     pub(crate) async fn accept_friend_request(&self, user_id: &Id) -> Result<()> {

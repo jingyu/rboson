@@ -41,7 +41,7 @@ pub struct PhotonFriendRequest {
 impl PhotonFriendRequest {
     const EXPIRATION: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 1 week
 
-    pub(crate) fn restore(
+    pub(crate) fn new(
         user_id: Id,
         initiator_id: Id,
         hello: Option<String>,
@@ -61,22 +61,21 @@ impl PhotonFriendRequest {
         }
     }
 
-    /// Creates a new outgoing request using the current time.
-    pub(crate) fn new(
+    pub(crate) fn create(
         user_id: Id,
         initiator_id: Id,
         hello: Option<String>,
         created_at: u64,
     ) -> Self {
-        Self {
+        Self::new(
             user_id,
             initiator_id,
             hello,
-            accepted: false,
+            false,
             created_at,
-            accepted_at: None,
-            updated_at: created_at,
-        }
+            None,
+            created_at,
+        )
     }
 
     /// Creates a record for a request received in a handshake.
@@ -92,14 +91,10 @@ impl PhotonFriendRequest {
             initiator_id,
             hello,
             accepted: false,
-            created_at: Self::not_in_the_future(sent_at, now),
+            created_at: sent_at.min(now),
             accepted_at: None,
             updated_at: now,
         }
-    }
-
-    pub(crate) fn not_in_the_future(time: u64, now: u64) -> u64 {
-        time.min(now)
     }
 
     pub(crate) fn accept_now(&mut self) {

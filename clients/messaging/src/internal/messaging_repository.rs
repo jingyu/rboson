@@ -348,7 +348,7 @@ fn message_to_stored(message: &PhotonMessage) -> Result<StoredMessage> {
         .map(|content| content.content_type().to_string());
     let content_disposition = match message.content.as_ref() {
         Some(content) => content
-            .content_disposition()?
+            .content_disposition()
             .map(|disposition| disposition.value().to_string()),
         None => None,
     };

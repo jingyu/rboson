@@ -24,49 +24,50 @@ use std::{
 };
 
 use boson_api::{
+    errors::{Result, ArgumentError},
     Id,
-    errors::{Result, ArgumentError}
-};
-
-use crate::interfaces::{
-    MessageOps,
 };
 use crate::{
-    contact::{Contact, ContactType},
-    conversation::BoxedConversation,
+    conversation::{Conversation, BoxedConversation},
     invite_ticket::InviteTicket,
     message::Message,
-    Conversation,
+    contact::{Contact, BoxedContact, ContactType},
+};
+
+use super::{
+    SessionContext,
+    photon_contact::PhotonContact,
 };
 
 #[derive(Clone)]
 pub struct PhotonConversation {
-    contact: Contact,
-    last_message: Option<Message>,
-    preview: Option<String>,
+    contact         : Contact,
+    last_message    : Option<Message>,
+    preview         : Option<String>,
+    session_context : Option<SessionContext>,
+
+   // session_context_factory: Arc<FactoryHandler<PhotonContact, SessionContext>>,
 }
 
 impl PhotonConversation {
     pub(crate) const MAX_SNIPPET_LENGTH: usize = 128;
 
     pub(crate) fn new(contact: Contact) -> Self {
-        Self {
-            contact,
-            last_message: None,
-            preview: None
-        }
+        Self::with_message(contact, None)
     }
 
-    pub(crate) fn update(&mut self, message: Message) -> Result<()> {
-        if message.conversation_id()
-            .map(|id| id != self.contact.id())
-            .unwrap_or(true) {
-            return Err(ArgumentError::new("Message does not match the conversation"));
-        }
+    pub(crate) fn with_message(contact: Contact, message: Option<Message>) -> Self {
+        let mut conversation = Self {
+            contact,
+            last_message: None,
+            preview: None,
+            session_context: None,
+        };
 
-        self.preview = Self::preview_for(&message)?;
-        self.last_message = Some(message);
-        Ok(())
+        if let Some(message) = message {
+            let _ = conversation.update(message);
+        }
+        conversation
     }
 
     fn preview_for(message: &Message) -> Result<Option<String>> {
@@ -74,7 +75,6 @@ impl PhotonConversation {
             return Ok(None);
         };
         let content_type = content.content_type();
-
         let snippet = if content_type.starts_with("text/") {
             let Ok(body) = content.as_text() else {
                 return Ok(None);
@@ -93,7 +93,7 @@ impl PhotonConversation {
             "(Video)".into()
         } else if content_type.starts_with(InviteTicket::CONTENT_TYPE) {
             "(Invitation)".into()
-        } else if content.content_disposition()?.is_some() {
+        } else if content.content_disposition().is_some() {
             "(Attachment)".into()
         } else {
             "(Unknown)".into()
@@ -102,14 +102,30 @@ impl PhotonConversation {
         Ok(Some(snippet))
     }
 
-    pub(crate) fn is(&self, other: &PhotonConversation) -> bool {
-        self.id() == other.id()
+    pub(crate) fn update(&mut self, message: Message) -> Result<()> {
+        if message.conversation_id()
+            .map(|id| id != self.contact.id())
+            .unwrap_or(true) {
+            return Err(ArgumentError::new("Message does not match the conversation"));
+        }
+
+        self.preview = Self::preview_for(&message)?;
+        self.last_message = Some(message);
+        Ok(())
+    }
+
+    pub(crate) fn set_session_context(&mut self, context: SessionContext) {
+        self.session_context = Some(context);
+    }
+
+    pub(crate) fn session_context(&self) -> Option<&SessionContext> {
+        self.session_context.as_ref()
     }
 }
 
 impl PartialEq for PhotonConversation {
     fn eq(&self, other: &Self) -> bool {
-        self.is(other)
+        self.id() == other.id()
     }
 }
 
@@ -125,7 +141,7 @@ impl Conversation for PhotonConversation {
         self.contact.id()
     }
 
-    fn contact(&self) -> &Contact {
+    fn contact(&self) -> &BoxedContact {
         &self.contact
     }
 

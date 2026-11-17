@@ -32,7 +32,6 @@ use crate::{
     channel::{Channel, Permission, Role},
     Contact,
     SessionInfo,
-    Conversation,
     BoxedFriendRequest,
     InviteTicket,
     Message,

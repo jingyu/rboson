@@ -75,6 +75,8 @@ pub use {
     },
 
     contact::{
+        BoxedContact,
+        BoxedContactEditor,
         Contact,
         ContactType,
         ContactEditor

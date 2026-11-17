@@ -63,7 +63,7 @@ fn request(user_id: Id, initiator_id: Id) -> PhotonFriendRequest {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    PhotonFriendRequest::new(user_id, initiator_id, Some("hello".into()), now)
+    PhotonFriendRequest::create(user_id, initiator_id, Some("hello".into()), now)
 }
 
 #[tokio::test]

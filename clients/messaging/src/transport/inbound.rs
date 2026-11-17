@@ -953,7 +953,7 @@ impl RpcServer {
             return;
         }
 
-        let request = PhotonFriendRequest::new(
+        let request = PhotonFriendRequest::create(
             user_id,
             initiator_id,
             Some(hello.clone()),

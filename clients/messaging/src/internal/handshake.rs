@@ -37,8 +37,7 @@ pub(crate) enum HandshakeType {
     FriendRequestAccept(#[serde(with="utils::bytes")] Vec<u8>),
 }
 
-/// Signed friend handshake envelope.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Handshake {
     #[serde(rename = "t")]
     pub(crate) timestamp: u64,
@@ -50,87 +49,7 @@ pub(crate) struct Handshake {
     pub(crate) from: Option<Id>,
 }
 
-impl<'de> Deserialize<'de> for Handshake {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-
-        let value = serde_cbor::Value::deserialize(deserializer)?;
-        let serde_cbor::Value::Map(map) = value else {
-            return Err(D::Error::custom("Handshake payload is not a map"));
-        };
-
-        let mut timestamp = None;
-        let mut tag = None;
-        let mut body = None;
-        for (key, value) in map {
-            let serde_cbor::Value::Text(key) = key else {
-                return Err(D::Error::custom("Handshake key is not text"));
-            };
-            match key.as_str() {
-                "t" => {
-                    let serde_cbor::Value::Integer(value) = value else {
-                        return Err(D::Error::custom("Handshake timestamp is not an integer"));
-                    };
-                    let value: i128 = value.into();
-                    if value < 0 || value > u64::MAX as i128 {
-                        return Err(D::Error::custom("Handshake timestamp is out of range"));
-                    }
-                    timestamp = Some(value as u64);
-                }
-                "y" => {
-                    let serde_cbor::Value::Text(value) = value else {
-                        return Err(D::Error::custom("Handshake type is not text"));
-                    };
-                    tag = Some(value);
-                }
-                "b" => body = Some(value),
-                _ => return Err(D::Error::custom("Unknown handshake field")),
-            }
-        }
-
-        let timestamp = timestamp.ok_or_else(|| D::Error::custom("Missing handshake timestamp"))?;
-        let tag = tag.ok_or_else(|| D::Error::custom("Missing handshake type"))?;
-        let body = match tag.as_str() {
-            "fr" => match body {
-                None | Some(serde_cbor::Value::Null) => HandshakeType::FriendRequest(None),
-                Some(serde_cbor::Value::Text(hello)) => HandshakeType::FriendRequest(Some(hello)),
-                _ => return Err(D::Error::custom("Invalid friend request body")),
-            },
-            "fra" => match body {
-                Some(serde_cbor::Value::Bytes(key)) if key.len() == 64 => {
-                    HandshakeType::FriendRequestAccept(key)
-                }
-                _ => return Err(D::Error::custom("Invalid friend request accept body")),
-            },
-            _ => return Err(D::Error::custom("Unknown handshake type")),
-        };
-
-        Ok(Self {
-            timestamp,
-            body,
-            from: None,
-        })
-    }
-}
-
 impl Handshake {
-    pub(crate) fn new(timestamp: i64, body: HandshakeType) -> Result<Self> {
-        if timestamp < 0 {
-            return Err(EncodingError::new("Handshake timestamp is negative").into());
-        }
-        if matches!(&body, HandshakeType::FriendRequestAccept(key) if key.len() != 64) {
-            return Err(EncodingError::new("Handshake session key has an invalid length").into());
-        }
-        Ok(Self {
-            timestamp: timestamp as u64,
-            body,
-            from: None,
-        })
-    }
-
     pub(crate) fn friend_request(hello: Option<String>, timestamp: u64) -> Self {
         Self {
             timestamp: timestamp,

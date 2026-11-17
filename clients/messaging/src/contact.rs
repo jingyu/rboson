@@ -61,3 +61,6 @@ impl TryFrom<i32> for ContactType {
 
 pub type Contact = Box<dyn ContactOps>;
 pub type ContactEditor = Box<dyn ContactEditorOps>;
+
+pub type BoxedContact = Box<dyn ContactOps>;
+pub type BoxedContactEditor = Box<dyn ContactEditorOps>;

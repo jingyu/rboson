@@ -25,7 +25,11 @@ use boson_api::{
     Id,
     Result
 };
-use crate::{errors::EncodingError, MessageOriginated, SessionInfo};
+use crate::{
+    errors::EncodingError,
+    MessageOriginated,
+    SessionInfo
+};
 use super::{
     ChannelInfo,
     ChannelInfoUpdate,
