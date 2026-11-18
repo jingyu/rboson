@@ -169,7 +169,7 @@ fn merge_headers(
     } else if !text {
         merged.insert(
             content_type::HEADER_NAME.into(),
-            serde_json::Value::String(content_type::BINARY.into()),
+            serde_json::Value::String(content_type::ContentType::ApplicationOctetStream.as_str().into()),
         );
     }
 

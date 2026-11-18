@@ -32,6 +32,7 @@ use boson::{
     errors::Result,
     Id,
     messaging::{
+        ContactHandler,
         channel::Channel,
         ChannelListener,
         Client,

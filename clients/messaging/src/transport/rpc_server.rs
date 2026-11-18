@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+
 use super::prelude::*;
 
 use crate::{
@@ -20,7 +22,7 @@ pub(crate) struct RpcServer {
     pub(super) lifecycle: sync::Mutex<()>,
     pub(super) requests: sync::Mutex<()>,
 
-    pub(super) origin_clock: Arc<std::sync::Mutex<i64>>,
+    pub(super) origin_timestamp: AtomicI64,
 
     pub(super) pending_calls: Calls,
     pub(super) contacts_revision: Cell<i32>,
@@ -35,8 +37,8 @@ pub(crate) struct RpcServer {
     pub(super) repository: Rc<RefCell<MessagingRepository>>,
 
     pub(super) friend_requests_cache: AsyncCache<PhotonFriendRequest>,
-    pub(super) channels_cache: AsyncCache<Channel>,
-    pub(super) contacts_cache: AsyncCache<Contact>,
+    pub(super) channels_cache: AsyncCache<PhotonChannel>,
+    pub(super) contacts_cache: AsyncCache<PhotonContact>,
     pub(super) conversations_cache: AsyncCache<PhotonConversation>,
 
     pub(super) connection_listener: Arc<dyn ConnectionListener>,
@@ -68,7 +70,7 @@ impl RpcServer {
             stopping: Cell::new(false),
             lifecycle: tokio::sync::Mutex::new(()),
             requests: tokio::sync::Mutex::new(()),
-            origin_clock: Arc::new(std::sync::Mutex::new(0)),
+            origin_timestamp: AtomicI64::new(0),
 
             pending_calls: Calls::default(),
 
@@ -171,7 +173,7 @@ impl RpcServer {
             )
         };
 
-        let mut contacts: HashMap<Id, Contact> = HashMap::new();
+        let mut contacts: HashMap<Id, PhotonContact> = HashMap::new();
         let mut sessions = HashMap::new();
         let mut channels = HashMap::new();
         for stored in stored_contacts {
@@ -221,8 +223,8 @@ impl RpcServer {
                     members,
                 ));
                 sessions.insert(stored.id, session);
-                contacts.insert(stored.id, Box::new(contact) as Contact);
-                channels.insert(stored.id, channel);
+                contacts.insert(stored.id, contact);
+                channels.insert(stored.id, Self::to_photon_channel(channel.as_ref())?);
             } else {
                 let contact = {
                     let repo = self.repository.borrow();
@@ -260,5 +262,16 @@ impl RpcServer {
             .collect();
         self.contacts_revision.set(revision);
         Ok(())
+    }
+
+    /// Reclaims expired local records; run periodically by the verticle timer.
+    pub(crate) fn maintenance(&self) {
+        let mut requests = self.friend_requests_cache.borrow_mut();
+        let before = requests.len();
+        requests.retain(|_, request| !request.is_expired());
+        let removed = before - requests.len();
+        if removed > 0 {
+            debug!("Reclaimed {removed} expired friend request(s)");
+        }
     }
 }

@@ -77,6 +77,10 @@ pub struct PhotonChannel {
 }
 
 impl PhotonChannel {
+    pub(crate) fn photon_contact(&self) -> PhotonContact {
+        self.contact.clone()
+    }
+
     pub(crate) fn new(
         contact: PhotonContact,
         owner: Id,

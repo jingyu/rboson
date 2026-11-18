@@ -8,6 +8,7 @@ use boson::messaging::{
     Options, OptionsBuilder,
     ChannelListener,
     ContactType,
+    ContactHandler,
     InviteTicket,
     Message,
     MessageListener,

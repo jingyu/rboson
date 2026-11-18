@@ -1,3 +1,5 @@
+
+use crate::ContactHandler;
 // Copyright (c) 2023 -      bosonnetwork.io
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -281,8 +283,8 @@ impl MessagingRepository {
         self.store.get_all_contacts()
     }
 
-    pub(crate) fn contact_from_stored(&self, stored: &PhotonContact) -> Result<Contact> {
-        Ok(Box::new(stored.clone()))
+    pub(crate) fn contact_from_stored(&self, stored: &PhotonContact) -> Result<PhotonContact> {
+        Ok(stored.clone())
     }
 
     pub(crate) fn photon_contact_from_stored(&self, stored: &PhotonContact) -> Result<PhotonContact> {
@@ -459,8 +461,8 @@ fn channel_to_photon(channel: &Channel, session_key: &[u8]) -> PhotonContact {
     contact
 }
 
-fn stored_to_contact(stored: &PhotonContact) -> Result<Contact> {
-    Ok(Box::new(stored.clone()))
+fn stored_to_contact(stored: &PhotonContact) -> Result<PhotonContact> {
+    Ok(stored.clone())
 }
 
 fn member_to_stored(channel_id: &Id, member: &ChannelMember) -> StoredChannelMember {
@@ -491,7 +493,7 @@ fn stored_to_photon_member(stored: &StoredChannelMember) -> Result<PhotonChannel
 
 fn stored_to_photon_conversation(stored: StoredConversation) -> Result<PhotonConversation> {
     let contact = stored_to_contact(&stored.contact)?;
-    let mut conversation = PhotonConversation::new(contact);
+    let mut conversation = PhotonConversation::new(Box::new(contact) as Contact);
     if let Some(message) = stored.last_message {
         let message: Message = Box::new(stored_to_message(message)?);
         conversation.update(message)?;

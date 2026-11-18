@@ -26,6 +26,7 @@ use clap::{
     Command,
 };
 use boson::messaging::{
+    ContactHandler,
     Client,
     ContactType,
     FriendRequest,

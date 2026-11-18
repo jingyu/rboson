@@ -1,3 +1,5 @@
+
+use crate::ContactHandler;
 // Copyright (c) 2023 -      bosonnetwork.io
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -177,6 +179,24 @@ impl ContactData {
             self.revision,
             Value::Bytes(encrypted),
         ))
+    }
+}
+
+impl From<&PhotonContact> for ContactData {
+    fn from(contact: &PhotonContact) -> Self {
+        Self {
+            id: contact.id,
+            kind: contact.contact_type,
+            session_key: contact.session_key.clone(),
+            name: contact.name.clone(),
+            remark: contact.remark.clone(),
+            tags: contact.tags.clone(),
+            muted: contact.muted,
+            blocked: contact.blocked,
+            created_at: contact.created_at,
+            updated_at: contact.updated_at,
+            revision: contact.revision,
+        }
     }
 }
 

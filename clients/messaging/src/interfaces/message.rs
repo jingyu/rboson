@@ -28,7 +28,7 @@ use std::{
 use boson_api::{Id, Result};
 use crate::{
     content_disposition::ContentDisposition,
-    content_type,
+    content_type::{self, ContentType},
     MessageType,
 };
 
@@ -90,7 +90,7 @@ pub trait MessageContent: Send + Sync {
         self.headers()
             .get(content_type::HEADER_NAME)
             .and_then(serde_json::Value::as_str)
-            .unwrap_or(content_type::TEXT)
+            .unwrap_or(ContentType::TextPlain.as_str())
             .to_string()
     }
 

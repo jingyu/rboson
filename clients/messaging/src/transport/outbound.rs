@@ -1,7 +1,11 @@
 use super::prelude::*;
 use super::mqtt;
 
-use crate::FriendRequest;
+pub(super) const FIELD_SESSION_KEY: &str = "sk";
+pub(super) const FIELD_OWNER: &str = "o";
+pub(super) const FIELD_PERMISSION: &str = "p";
+pub(super) const FIELD_NOTICE: &str = "nt";
+pub(super) const FIELD_ANNOUNCED: &str = "a";
 
 #[derive(Clone, Copy)]
 enum MemberUpdate {
@@ -220,17 +224,15 @@ impl RpcServer {
         self.contacts_revision.set(confirmed);
 
         // 5. Apply the confirmed change to the local state.
-        let contact = Box::new(data.contact(confirmed)?) as Contact;
+        let contact = data.contact(confirmed)?;
         self.session_contexts.lock().unwrap().insert(
             *user_id,
             self.session_context(*user_id, session_identity, false),
         );
         self.put_contact(&contact).await?;
-       // self.contacts_cache.borrow_mut().insert(*user_id, contact.clone());
-       // self.persist_contact(&contact, data.session_key())?;
 
         // 6. Notify the application.
-        self.contact_listener.on_contact_added(&contact);
+        self.contact_listener.on_contact_added(&(Box::new(contact) as Contact));
         Ok(())
     }
 
@@ -285,7 +287,7 @@ impl RpcServer {
         self.contacts_revision.set(confirmed);
 
         // 5. Apply the confirmed change to the local state.
-        let blocked = Box::new(data.contact(confirmed)?) as Contact;
+        let blocked = data.contact(confirmed)?;
         // self.contacts_cache.borrow_mut().insert(*user_id, blocked.clone());
         //self.persist_contact(&blocked, data.session_key())?;
         self.put_contact(&blocked).await?;
@@ -293,9 +295,10 @@ impl RpcServer {
 
 
         // 6. Notify the application.
+        let blocked_contact: Contact = Box::new(blocked.clone());
         self.contact_listener
-            .on_contacts_updated(std::slice::from_ref(&blocked));
-        Ok(blocked)
+            .on_contacts_updated(std::slice::from_ref(&blocked_contact));
+        Ok(Box::new(blocked) as Contact)
     }
 
     pub(crate) async fn create_channel(
@@ -451,7 +454,7 @@ impl RpcServer {
         }
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
         let member = channel
             .member(self.user_id())
             .ok_or_else(|| StateError::new("Not a member of the channel"))?;
@@ -503,6 +506,7 @@ impl RpcServer {
             .borrow()
             .get(id)
             .cloned()
+            .map(|channel| Box::new(channel) as Channel)
             .ok_or_else(|| StateError::new(format!("Channel {id} does not exist")).into())
     }
 
@@ -603,11 +607,12 @@ impl RpcServer {
             .lock()
             .unwrap()
             .insert(*channel.id(), session);
+        let contact = Self::to_photon_contact_ops(channel.contact_box().as_ref())?;
         self.contacts_cache
             .borrow_mut()
-            .insert(*channel.id(), channel.contact_box());
-        self.contact_listener.on_contact_added(&channel.contact_box());
-        self.channels_cache.borrow_mut().insert(*channel.id(), channel.clone());
+            .insert(*channel.id(), contact.clone());
+        self.contact_listener.on_contact_added(&(Box::new(contact) as Contact));
+        self.channels_cache.borrow_mut().insert(*channel.id(), Self::to_photon_channel(channel.as_ref())?);
         self.repository.borrow_mut().put_channel(revision, &channel, &key)?;
         Ok(())
     }
@@ -661,8 +666,8 @@ impl RpcServer {
         channel.update_member_roles(&[old_owner], Role::Moderator);
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
-        self.persist_channel(&channel)?;
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+        self.persist_channel(channel.as_ref())?;
 
         // 6. Notify the application.
         self.channel_listener
@@ -708,8 +713,8 @@ impl RpcServer {
         );
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
-        self.persist_channel(&channel)?;
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+        self.persist_channel(channel.as_ref())?;
 
         self.channel_listener
             .on_channel_session_key_rotated(&channel);
@@ -753,13 +758,14 @@ impl RpcServer {
         current.set_notice(channel.notice().map(ToString::to_string));
         current.set_announced(channel.is_announced());
         current.set_updated_at(Self::current_timestamp()?);
+        let contact = Self::to_photon_contact_ops(current.contact_box().as_ref())?;
         self.contacts_cache
             .borrow_mut()
-            .insert(*channel.id(), current.contact_box());
+            .insert(*channel.id(), contact);
         self.channels_cache
             .borrow_mut()
-            .insert(*channel.id(), current.clone());
-        self.persist_channel(&current)?;
+            .insert(*channel.id(), Self::to_photon_channel(current.as_ref())?);
+        self.persist_channel(current.as_ref())?;
         self.channel_listener.on_channel_updated(&current);
         Ok(())
     }
@@ -783,8 +789,8 @@ impl RpcServer {
         let changed = MemberUpdate::Role(role).apply(&mut channel, &touched);
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
-        self.persist_channel(&channel)?;
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+        self.persist_channel(channel.as_ref())?;
 
         if changed.is_empty() {
             return Ok(())
@@ -806,8 +812,8 @@ impl RpcServer {
         let changed = MemberUpdate::Ban.apply(&mut channel, &touched);
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
-        self.persist_channel(&channel)?;
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+        self.persist_channel(channel.as_ref())?;
 
         if changed.is_empty() {
             return Ok(())
@@ -833,8 +839,8 @@ impl RpcServer {
         let changed = MemberUpdate::Unban.apply(&mut channel, &touched);
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
-        self.persist_channel(&channel)?;
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+        self.persist_channel(channel.as_ref())?;
 
         if changed.is_empty() {
             return Ok(());
@@ -862,8 +868,8 @@ impl RpcServer {
         let changed = MemberUpdate::Remove.apply(&mut channel, &touched);
         self.channels_cache
             .borrow_mut()
-            .insert(*channel_id, channel.clone());
-        self.persist_channel(&channel)?;
+            .insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+        self.persist_channel(channel.as_ref())?;
 
         if changed.is_empty() {
             return Ok(());
@@ -911,8 +917,8 @@ impl RpcServer {
         id_opt: Option<&Id>
     ) -> Result<Vec<Contact>> {
         Ok(match id_opt {
-            Some(id) => self.contact(id).await.into_iter().collect(),
-            None => self.contacts().await,
+            Some(id) => self.contact(id).await.into_iter().map(|contact| Box::new(contact) as Contact).collect(),
+            None => self.contacts().await.into_iter().map(|contact| Box::new(contact) as Contact).collect(),
         })
     }
 
@@ -963,7 +969,7 @@ impl RpcServer {
         if let Some(key) = &key {
             data.set_session_key(key.clone());
         }
-        let mut updated = Box::new(data.contact(next_revision)?) as Contact;
+        let mut updated = data.contact(next_revision)?;
         let opaque = if origin.contact_type() == ContactType::Channel {
             let channel = self.channel_snapshot(contact.id())?;
             let key = key.ok_or_else(|| StateError::new("Channel session key is missing"))?;
@@ -1013,12 +1019,13 @@ impl RpcServer {
             let session_key = self.persisted_session_key(updated.id()).ok();
             self.repository.borrow_mut().put_contact(
                 self.contacts_revision.get(),
-                &Self::to_photon_contact(&updated)?,
+                &updated,
                 session_key.as_deref(),
             )?;
         }
         // 6. Notify the application.
-        self.contact_listener.on_contacts_updated(&[updated]);
+        let updated_contact: Contact = Box::new(updated.clone());
+        self.contact_listener.on_contacts_updated(&[updated_contact]);
         Ok(())
     }
 
@@ -1056,8 +1063,8 @@ impl RpcServer {
             device_identity: self.device_identity.clone(),
             friend_sessions: self.session_contexts.clone(),
             blocked_contacts: self.blocked_contacts.clone(),
-            origin_clock: self.origin_clock.clone(),
-            conversation_contact: recipient.and_then(|id| self.contacts_cache.borrow().get(&id).cloned()),
+            origin_timestamp: self.origin_timestamp(),
+            conversation_contact: recipient.and_then(|id| self.contacts_cache.borrow().get(&id).cloned()).map(|contact| Box::new(contact) as Contact),
             conversations: self.conversations_cache.shared(),
             peer_id: *self.peer_id(),
             content_type: None,
@@ -1072,7 +1079,7 @@ impl RpcServer {
     ///
     pub(crate) async fn send_control(&self, recipient: &Id, request: RPCRequest) -> Result<ResponseParams> {
 
-        let timestamp = Self::origin_timestamp(&self.origin_clock);
+        let timestamp = self.origin_timestamp();
         let method = request.method();
 
         let request = request.with_id(timestamp);
@@ -1106,7 +1113,7 @@ impl RpcServer {
         if !self.is_open() {
             return Err(StateError::new("Messaging client is not running").into());
         }
-        let timestamp = Self::origin_timestamp(&self.origin_clock);
+        let timestamp = self.origin_timestamp();
         let handshake = match body {
             HandshakeType::FriendRequest(hello) => {
                 Handshake::friend_request(hello, timestamp as u64)
@@ -1211,7 +1218,7 @@ pub(crate) struct SessionMessageBuilder {
     device_identity: CryptoIdentity,
     friend_sessions: Arc<std::sync::Mutex<HashMap<Id, SessionContext>>>,
     blocked_contacts: Arc<std::sync::Mutex<HashSet<Id>>>,
-    origin_clock: Arc<std::sync::Mutex<i64>>,
+    origin_timestamp: i64,
     conversation_contact: Option<Contact>,
     conversations: Arc<Mutex<HashMap<Id, PhotonConversation>>>,
     peer_id: Id,
@@ -1299,7 +1306,7 @@ impl MessageBuilderOps for SessionMessageBuilder {
                 this.text,
             );
 
-            let timestamp = RpcServer::origin_timestamp(&this.origin_clock);
+            let timestamp = this.origin_timestamp;
             let content = PhotonContent {
                 headers: headers_to_cbor(&headers)?,
                 format: if this.text {
@@ -1377,7 +1384,7 @@ fn build_message_headers(
     } else if !text && !merged.contains_key(content_type::HEADER_NAME) {
         merged.insert(
             content_type::HEADER_NAME.into(),
-            serde_json::Value::String(content_type::BINARY.into()),
+            serde_json::Value::String(content_type::ContentType::ApplicationOctetStream.as_str().into()),
         );
     }
 

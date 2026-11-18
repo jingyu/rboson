@@ -1,4 +1,4 @@
-pub(crate) use crate::FriendRequestHandler;
+pub(crate) use crate::{ChannelHandler, ContactHandler, FriendRequestHandler};
 pub(crate) use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
@@ -95,16 +95,8 @@ pub(crate) use super::transport::{
 pub(crate) use crate::internal::verticle::VerticleOptions;
 pub(crate) use super::{
     RpcServer,
-    ChannelContactInfo,
-    DecodedContact,
-    ContactState,
     MESSAGE_VERSION,
     HANDSHAKE_MESSAGE,
-    RPC_TIMEOUT,
-    FIELD_SESSION_KEY,
-    FIELD_OWNER,
-    FIELD_PERMISSION,
-    FIELD_NOTICE,
-    FIELD_ANNOUNCED,
+    RPC_TIMEOUT
 };
 

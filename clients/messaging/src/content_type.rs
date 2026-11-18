@@ -20,9 +20,6 @@
 
 pub const HEADER_NAME: &str = "Content-Type";
 
-pub const TEXT: &str = "text/plain";
-pub const BINARY: &str = "application/octet-stream";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
     TextPlain,

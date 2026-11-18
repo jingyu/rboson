@@ -134,12 +134,12 @@ async fn clear_friend_request_clears_repository_and_cache() {
 }
 
 fn conversation(user_id: Id) -> PhotonConversation {
-    let contact = Box::new(crate::internal::photon_contact::PhotonContact::new(
+    let contact = crate::internal::photon_contact::PhotonContact::new(
         user_id,
         crate::contact::ContactType::Friend,
         1,
-    )) as Contact;
-    PhotonConversation::new(contact)
+    );
+    PhotonConversation::new(Box::new(contact) as Contact)
 }
 
 #[tokio::test]
@@ -204,10 +204,10 @@ async fn clear_conversations_clears_one_conversation() {
     assert!(server.conversation(second.id()).await.is_some());
 }
 
-fn contact(user_id: Id) -> Contact {
+fn contact(user_id: Id) -> crate::internal::photon_contact::PhotonContact {
     let mut contact = crate::internal::photon_contact::PhotonContact::new(user_id, crate::contact::ContactType::Friend, 1);
     contact.set_revision(1);
-    Box::new(contact) as Contact
+    contact
 }
 
 #[tokio::test]
@@ -276,7 +276,7 @@ async fn channel_put_get_and_remove() {
     let channel = channel(user_id, owner, session_id);
     install_channel(&server, &channel);
 
-    server.put_channel(&channel).await.unwrap();
+    server.put_channel(channel.as_ref()).await.unwrap();
 
     let loaded = server.channel(&user_id).await.unwrap();
     assert_eq!(*loaded.id(), user_id);
@@ -302,8 +302,8 @@ async fn channels_lists_cached_channels() {
     );
     install_channel(&server, &first);
     install_channel(&server, &second);
-    server.put_channel(&first).await.unwrap();
-    server.put_channel(&second).await.unwrap();
+    server.put_channel(first.as_ref()).await.unwrap();
+    server.put_channel(second.as_ref()).await.unwrap();
 
     let channels = server.channels().await;
     assert_eq!(channels.len(), 2);
@@ -326,8 +326,8 @@ async fn remove_channels_clears_cached_channels() {
     );
     install_channel(&server, &first);
     install_channel(&server, &second);
-    server.put_channel(&first).await.unwrap();
-    server.put_channel(&second).await.unwrap();
+    server.put_channel(first.as_ref()).await.unwrap();
+    server.put_channel(second.as_ref()).await.unwrap();
 
     server.remove_channels().await;
 

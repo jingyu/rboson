@@ -19,11 +19,10 @@
 // SOFTWARE.
 
 use std::{
-    collections::HashMap,
     future::Future,
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, SystemTime},
 };
 use futures::{
@@ -31,7 +30,6 @@ use futures::{
     FutureExt,
 };
 use log::{debug, warn};
-use serde::Deserialize;
 
 use boson_api::{
     Result,
@@ -42,50 +40,33 @@ use boson_api::{
 };
 
 use crate::{
-    Conversation, ConversationHandler, FriendRequestHandler, channel::Channel, contact::{Contact, ContactType}, internal::{PhotonChannel, PhotonConversation, session_context::SessionContext}
+    errors::EncodingError,
+    ContactHandler,
+    ChannelHandler,
+    ConversationHandler,
+    FriendRequestHandler,
+    channel::Channel,
+    contact::{Contact, ContactType}
 };
-
-use crate::internal::photon_friend_request::PhotonFriendRequest;
-use crate::{ChannelHandler, ContactHandler};
-use crate::internal::{ContactData, ContactMutation, PhotonChannelMember, PhotonContact};
-use crate::rpc::{request::RPCRequest, response::Params as ResponseParams};
-use crate::errors::EncodingError;
+use crate::internal::{
+    session_context::SessionContext,
+    PhotonChannel,
+    PhotonContact,
+    PhotonConversation,
+    PhotonFriendRequest,
+    ContactData,
+    ContactMutation,
+    PhotonChannelMember,
+};
+use crate::rpc::{
+    request::RPCRequest,
+    response::Params as ResponseParams
+};
 
 pub(super) const MESSAGE_VERSION: u8 = 2;
 pub(super) const HANDSHAKE_MESSAGE: u8 = 0;
 
 pub(super) const RPC_TIMEOUT: Duration = Duration::from_secs(15);
-
-pub(super) const FIELD_SESSION_KEY: &str = "sk";
-pub(super) const FIELD_OWNER: &str = "o";
-pub(super) const FIELD_PERMISSION: &str = "p";
-pub(super) const FIELD_NOTICE: &str = "nt";
-pub(super) const FIELD_ANNOUNCED: &str = "a";
-
-#[derive(Deserialize)]
-pub(super) struct ChannelContactInfo {
-    #[serde(rename = "o")]
-    pub(super) owner: Id,
-    #[serde(rename = "p")]
-    pub(super) permission: i32,
-    #[serde(rename = "nt", default)]
-    pub(super) notice: Option<String>,
-    #[serde(rename = "a", default)]
-    pub(super) announced: bool,
-}
-
-pub(super) struct DecodedContact {
-    pub(super) contact: Contact,
-    pub(super) session: Option<CryptoIdentity>,
-    pub(super) channel: Option<Channel>,
-}
-
-pub(super) struct ContactState {
-    pub(super) contacts: HashMap<Id, Contact>,
-    pub(super) sessions: HashMap<Id, SessionContext>,
-    pub(super) channels: HashMap<Id, Channel>,
-    pub(super) revision: i32,
-}
 
 impl RpcServer {
     fn persisted_session_key(&self, contact_id: &Id) -> Result<Vec<u8>> {
@@ -100,23 +81,41 @@ impl RpcServer {
             .encrypt_into(self.user_id(), session.private_key())
     }
 
-    fn persist_contact(&self, contact: &Contact, session_key: Option<&[u8]>) -> Result<()> {
-        let photon = Self::to_photon_contact(contact)?;
+    fn persist_contact(&self, contact: &PhotonContact, session_key: Option<&[u8]>) -> Result<()> {
+        let photon = contact.clone();
         self.repository
             .borrow_mut()
             .put_contact(self.contacts_revision.get(), &photon, session_key)
     }
 
     fn to_photon_contact(contact: &Contact) -> Result<PhotonContact> {
-        let data = ContactData::from(contact);
+        Self::to_photon_contact_ops(contact.as_ref())
+    }
+
+    pub(super) fn to_photon_contact_ops(
+        contact: &dyn crate::ContactHandler,
+    ) -> Result<PhotonContact> {
+        let mut data = ContactData::new(
+            *contact.id(),
+            contact.contact_type() as u8,
+            contact.created_at(),
+        );
+        data.name = contact.name().map(ToString::to_string);
+        data.remark = contact.remark().map(ToString::to_string);
+        data.tags = contact.tags().map(ToString::to_string);
+        data.muted = contact.is_muted();
+        data.blocked = contact.is_blocked();
+        data.updated_at = contact.updated_at();
+        data.revision = contact.revision();
         Ok(PhotonContact::try_from(data)?)
     }
 
-    fn persist_channel(&self, channel: &Channel) -> Result<()> {
+    fn persist_channel(&self, channel: &dyn crate::ChannelHandler) -> Result<()> {
         let key = self.persisted_session_key(channel.id())?;
+        let boxed: Channel = Box::new(Self::to_photon_channel(channel)?);
         self.repository
             .borrow_mut()
-            .put_channel(self.contacts_revision.get(), channel, &key)
+            .put_channel(self.contacts_revision.get(), &boxed, &key)
     }
 
     fn session_context(
@@ -134,24 +133,19 @@ impl RpcServer {
         }
     }
 
-    fn origin_timestamp(clock: &std::sync::Mutex<i64>) -> i64 {
+    fn origin_timestamp(&self) -> i64 {
         let now = boson_api::as_ms!(SystemTime::now()) as i64;
-        let mut prev = clock.lock().unwrap();
+        let prev = self.origin_timestamp.load(Ordering::SeqCst);
         let next = prev.checked_add(1).unwrap();
         let timestamp = now.max(next);
-        *prev = timestamp;
-        timestamp
-    }
+        let _ = self.origin_timestamp.compare_exchange(
+            prev,
+            timestamp,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
 
-    /// Reclaims expired local records; run periodically by the verticle timer.
-    pub(crate) fn maintenance(&self) {
-        let mut requests = self.friend_requests_cache.borrow_mut();
-        let before = requests.len();
-        requests.retain(|_, request| !request.is_expired());
-        let removed = before - requests.len();
-        if removed > 0 {
-            debug!("Reclaimed {removed} expired friend request(s)");
-        }
+        timestamp
     }
 
     /// Queues a contact resync if one is due and none is already running.
@@ -205,7 +199,7 @@ impl RpcServer {
         self.session_contexts.lock().unwrap().get(from).cloned()
     }
 
-    pub(crate) async fn contact(&self, id: &Id) -> Option<Contact> {
+    pub(crate) async fn contact(&self, id: &Id) -> Option<PhotonContact> {
         if let Some(contact) = self.contacts_cache.borrow().get(id).cloned() {
             return Some(contact);
         }
@@ -234,7 +228,7 @@ impl RpcServer {
         }
     }
 
-    pub(crate) async fn contacts(&self) -> Vec<Contact> {
+    pub(crate) async fn contacts(&self) -> Vec<PhotonContact> {
         let stored = match self.repository.borrow_mut().load_contacts() {
             Ok(contacts) => contacts,
             Err(error) => {
@@ -255,20 +249,19 @@ impl RpcServer {
         self.contacts_cache.borrow().values().cloned().collect()
     }
 
-    pub(crate) async fn put_contact(&self, contact: &Contact) -> Result<()> {
+    pub(crate) async fn put_contact(&self, contact: &PhotonContact) -> Result<()> {
         let session_key = self.persisted_session_key(contact.id()).ok();
         let revision = self.contacts_revision.get();
-        let photon = Self::to_photon_contact(contact)?;
         self.repository
             .borrow_mut()
-            .put_contact(revision, &photon, session_key.as_deref())?;
+            .put_contact(revision, contact, session_key.as_deref())?;
         self.contacts_cache
             .borrow_mut()
             .insert(*contact.id(), contact.clone());
         Ok(())
     }
 
-    pub(crate) async fn put_contacts(&self, contacts: &[Contact]) -> Result<()> {
+    pub(crate) async fn put_contacts(&self, contacts: &[PhotonContact]) -> Result<()> {
         for contact in contacts {
             self.put_contact(contact).await?;
         }
@@ -338,7 +331,7 @@ impl RpcServer {
                 PhotonChannelMember::new(
                     *member.id(),
                     member.role(),
-                    boson_api::as_ms!(member.joined()) as u64,
+                    member.joined().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
                 )
             })
             .collect();
@@ -398,12 +391,12 @@ impl RpcServer {
     fn cache_channel(&self, channel: &PhotonChannel) {
         self.channels_cache
             .borrow_mut()
-            .insert(*channel.id(), Box::new(channel.clone()));
+            .insert(*channel.id(), channel.clone());
     }
 
     pub(crate) async fn channel(&self, id: &Id) -> Option<PhotonChannel> {
         if let Some(channel) = self.channels_cache.borrow().get(id).cloned() {
-            return Self::to_photon_channel(channel.as_ref()).ok();
+            return Some(channel);
         }
 
         let stored = match self.repository.borrow_mut().stored_channels() {
@@ -436,25 +429,23 @@ impl RpcServer {
                 }
             }
         }
-        self.channels_cache
-            .borrow()
-            .values()
-            .filter_map(|channel| Self::to_photon_channel(channel.as_ref()).ok())
-            .collect()
+        self.channels_cache.borrow().values().cloned().collect()
     }
 
-    pub(crate) async fn put_channel(&self, channel: &Channel) -> Result<()> {
-        let session_key = self.persisted_session_key(channel.id())?;
+    pub(crate) async fn put_channel(&self, channel: &dyn crate::ChannelHandler) -> Result<()> {
+        let photon = Self::to_photon_channel(channel)?;
+        let session_key = self.persisted_session_key(photon.id())?;
         let revision = self.contacts_revision.get();
+        let boxed: Channel = Box::new(photon.clone());
         self.repository
             .borrow_mut()
-            .put_channel(revision, channel, &session_key)?;
+            .put_channel(revision, &boxed, &session_key)?;
         self.channels_cache
             .borrow_mut()
-            .insert(*channel.id(), channel.clone());
+            .insert(*photon.id(), photon.clone());
         self.contacts_cache
             .borrow_mut()
-            .insert(*channel.id(), channel.contact_box());
+            .insert(*photon.id(), photon.photon_contact());
         Ok(())
     }
 
@@ -639,7 +630,7 @@ impl RpcServer {
         Ok(())
     }
 
-    pub(crate) async fn clear_friend_request(&self) -> Result<()> {
+    async fn _clear_friend_request(&self) -> Result<()> {
         self.repository.borrow_mut().clear_friend_requests()?;
         self.friend_requests_cache.borrow_mut().clear();
         Ok(())
