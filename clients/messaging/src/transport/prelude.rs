@@ -1,3 +1,4 @@
+pub(crate) use crate::FriendRequestHandler;
 pub(crate) use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
@@ -43,10 +44,10 @@ pub(crate) use crate::{
     Message,
     MessageListener,
     SessionListener,
+    ChannelMemberHandler
 };
 
 pub(crate) use crate::interfaces::{
-    ChannelMemberOps,
     MessageBuilderOps,
 };
 

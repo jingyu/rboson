@@ -2,7 +2,8 @@ use super::prelude::*;
 
 use crate::{
     FriendRequest,
-    Conversation
+    Conversation,
+    ConversationHandler,
 };
 
 pub(crate) struct RpcServer {

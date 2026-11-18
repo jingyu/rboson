@@ -29,13 +29,12 @@ use crate::{
     channel::{Permission, Role},
     contact::{ContactType},
 };
-
-use crate::interfaces::{
-    ChannelMemberOps,
-    ChannelEditorOps,
-    ContactEditorOps,
-    ChannelOps,
-    ContactOps,
+use crate::{
+    ContactHandler,
+    ContactEditorHandler,
+    ChannelMemberHandler,
+    ChannelHandler,
+    ChannelEditorHandler
 };
 
 use super::{
@@ -99,7 +98,7 @@ impl PhotonChannel {
     }
 }
 
-impl ContactOps for PhotonChannel {
+impl ContactHandler for PhotonChannel {
     fn id(&self) -> &Id {
         self.contact.id()
     }
@@ -140,11 +139,11 @@ impl ContactOps for PhotonChannel {
         self.contact.revision()
     }
 
-    fn edit(&self) -> Box<dyn ContactEditorOps> {
+    fn edit(&self) -> Box<dyn ContactEditorHandler> {
         self.contact.edit()
     }
 
-    fn clone_box(&self) -> Box<dyn ContactOps> {
+    fn clone_box(&self) -> Box<dyn ContactHandler> {
         Box::new(self.clone())
     }
 
@@ -153,7 +152,7 @@ impl ContactOps for PhotonChannel {
     }
 }
 
-impl ChannelOps for PhotonChannel {
+impl ChannelHandler for PhotonChannel {
     fn permission(&self) -> Permission {
         Permission::from_i32(self.permission)
     }
@@ -174,23 +173,23 @@ impl ChannelOps for PhotonChannel {
         self.members.iter().filter(|member| member.role() == crate::channel::Role::Banned).count()
     }
 
-    fn members(&self) -> Vec<Box<dyn ChannelMemberOps>> {
-        self.members.iter().cloned().map(|m| Box::new(m) as Box<dyn ChannelMemberOps>).collect()
+    fn members(&self) -> Vec<Box<dyn ChannelMemberHandler>> {
+        self.members.iter().cloned().map(|m| Box::new(m) as Box<dyn ChannelMemberHandler>).collect()
     }
 
-    fn member(&self, member_id: &Id) -> Option<Box<dyn ChannelMemberOps>> {
+    fn member(&self, member_id: &Id) -> Option<Box<dyn ChannelMemberHandler>> {
         self.members
             .iter()
             .find(|member| member.id() == member_id)
             .cloned()
-            .map(|m| Box::new(m) as Box<dyn ChannelMemberOps>)
+            .map(|m| Box::new(m) as Box<dyn ChannelMemberHandler>)
     }
 
-    fn edit_channel(&self) -> Box<dyn ChannelEditorOps> {
-        Box::new(PhotonChannelEditor(self.clone())) as Box<dyn ChannelEditorOps>
+    fn edit_channel(&self) -> Box<dyn ChannelEditorHandler> {
+        Box::new(PhotonChannelEditor(self.clone())) as Box<dyn ChannelEditorHandler>
     }
 
-    fn clone_box(&self) -> Box<dyn ChannelOps> {
+    fn clone_box(&self) -> Box<dyn ChannelHandler> {
         Box::new(self.clone())
     }
 
@@ -202,7 +201,7 @@ impl ChannelOps for PhotonChannel {
         &self.session_id
     }
 
-    fn contact_box(&self) -> Box<dyn ContactOps> {
+    fn contact_box(&self) -> Box<dyn ContactHandler> {
         Box::new(self.contact.clone())
     }
 
@@ -247,7 +246,7 @@ impl ChannelOps for PhotonChannel {
         self.members.push(PhotonChannelMember::new(id, role, joined));
     }
 
-    fn update_member_roles(&mut self, ids: &[Id], role: Role) -> Vec<Box<dyn ChannelMemberOps>> {
+    fn update_member_roles(&mut self, ids: &[Id], role: Role) -> Vec<Box<dyn ChannelMemberHandler>> {
         let mut changed = Vec::new();
         for member in &mut self.members {
             if ids.contains(member.id()) {
@@ -257,17 +256,17 @@ impl ChannelOps for PhotonChannel {
                     .map(|duration| duration.as_secs())
                     .unwrap_or(0);
                 *member = PhotonChannelMember::new(*member.id(), role, joined);
-                changed.push(Box::new(member.clone()) as Box<dyn ChannelMemberOps>);
+                changed.push(Box::new(member.clone()) as Box<dyn ChannelMemberHandler>);
             }
         }
         changed
     }
 
-    fn remove_members(&mut self, ids: &[Id]) -> Vec<Box<dyn ChannelMemberOps>> {
+    fn remove_members(&mut self, ids: &[Id]) -> Vec<Box<dyn ChannelMemberHandler>> {
         let mut removed = Vec::new();
         self.members.retain(|member| {
             if ids.contains(member.id()) {
-                removed.push(Box::new(member.clone()) as Box<dyn ChannelMemberOps>);
+                removed.push(Box::new(member.clone()) as Box<dyn ChannelMemberHandler>);
                 false
             } else {
                 true
@@ -279,28 +278,28 @@ impl ChannelOps for PhotonChannel {
 
 pub struct PhotonChannelEditor(PhotonChannel);
 
-impl ChannelEditorOps for PhotonChannelEditor {
-    fn permission(mut self: Box<Self>, permission: Permission) -> Box<dyn ChannelEditorOps> {
+impl ChannelEditorHandler for PhotonChannelEditor {
+    fn permission(mut self: Box<Self>, permission: Permission) -> Box<dyn ChannelEditorHandler> {
         self.0.permission = permission as i32;
         self
     }
 
-    fn name(mut self: Box<Self>, name: String) -> Box<dyn ChannelEditorOps> {
+    fn name(mut self: Box<Self>, name: String) -> Box<dyn ChannelEditorHandler> {
         self.0.contact.set_name(Some(name));
         self
     }
 
-    fn notice(mut self: Box<Self>, notice: Option<String>) -> Box<dyn ChannelEditorOps> {
+    fn notice(mut self: Box<Self>, notice: Option<String>) -> Box<dyn ChannelEditorHandler> {
         self.0.notice = notice;
         self
     }
 
-    fn announced(mut self: Box<Self>, announced: bool) -> Box<dyn ChannelEditorOps> {
+    fn announced(mut self: Box<Self>, announced: bool) -> Box<dyn ChannelEditorHandler> {
         self.0.announced = announced;
         self
     }
 
-    fn build(self: Box<Self>) -> Box<dyn ChannelOps> {
-        Box::new(self.0) as Box<dyn ChannelOps>
+    fn build(self: Box<Self>) -> Box<dyn ChannelHandler> {
+        Box::new(self.0) as Box<dyn ChannelHandler>
     }
 }

@@ -38,7 +38,6 @@ pub mod session_listener;
 pub mod connection_listener;
 
 pub mod friend_request;
-pub mod friend_request_listener;
 
 pub mod contact;
 pub mod contact_listener;
@@ -59,27 +58,31 @@ pub use {
 
     messaging_client::MessagingClient,
 
-    friend_request_listener::FriendRequestListener,
     connection_listener::ConnectionListener,
     contact_listener::ContactListener,
     message_listener::MessageListener,
     session_listener::SessionListener,
     channel_listener::ChannelListener,
 
+    session_info::SessionInfo,
     invite_ticket::InviteTicket,
+
     channel::{
         Permission,
         Role,
         Channel,
-        ChannelMember
+        ChannelMember,
+        ChannelHandler,
+        ChannelMemberHandler,
+        ChannelEditorHandler,
     },
 
     contact::{
-        BoxedContact,
-        BoxedContactEditor,
         Contact,
         ContactType,
-        ContactEditor
+        ContactEditor,
+        ContactHandler,
+        ContactEditorHandler
     },
 
     message::{
@@ -96,20 +99,19 @@ pub use {
         HEADER_NAME as CONTENT_DISPOSITION_HEADER,
     },
 
-    session_info::SessionInfo,
+    conversation::{
+        Conversation,
+        ConversationHandler
+    },
 
-    conversation::{Conversation, BoxedConversation},
-    friend_request::{FriendRequest, BoxedFriendRequest},
+    friend_request::{
+        FriendRequest,
+        FriendRequestHandler,
+        FriendRequestListener
+    },
 };
 
 pub use interfaces::{
-    ChannelOps,
-    ChannelEditorOps,
-    ChannelMemberOps,
-
-    ContactOps,
-    ContactEditorOps,
-
     MessageContentOps,
     MessageBuilderOps,
     MessageOps,

@@ -42,11 +42,11 @@ use boson_api::{
 };
 
 use crate::{
-    Conversation, FriendRequest, channel::Channel, contact::{Contact, ContactType}, internal::{PhotonChannel, PhotonConversation, session_context::SessionContext}
+    Conversation, ConversationHandler, FriendRequestHandler, channel::Channel, contact::{Contact, ContactType}, internal::{PhotonChannel, PhotonConversation, session_context::SessionContext}
 };
 
 use crate::internal::photon_friend_request::PhotonFriendRequest;
-use crate::{ChannelOps, ContactOps};
+use crate::{ChannelHandler, ContactHandler};
 use crate::internal::{ContactData, ContactMutation, PhotonChannelMember, PhotonContact};
 use crate::rpc::{request::RPCRequest, response::Params as ResponseParams};
 use crate::errors::EncodingError;
@@ -317,7 +317,7 @@ impl RpcServer {
         Ok(())
     }
 
-    pub(super) fn to_photon_channel(channel: &dyn crate::ChannelOps) -> Result<PhotonChannel> {
+    pub(super) fn to_photon_channel(channel: &dyn crate::ChannelHandler) -> Result<PhotonChannel> {
         let mut data = ContactData::new(
             *channel.id(),
             ContactType::Channel as u8,

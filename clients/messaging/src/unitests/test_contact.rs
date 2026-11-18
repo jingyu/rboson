@@ -23,7 +23,7 @@ use serde_cbor::Value;
 use boson_api::Id;
 use crate::{
     internal::{ContactData, PhotonContact},
-    ContactOps,
+    ContactHandler,
 };
 
 fn new_contact_data(kind: u8, revision: i32) -> ContactData {

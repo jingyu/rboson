@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use crate::{
     internal::{photon_friend_request::PhotonFriendRequest, verticle::VerticleOptions},
-    ChannelOps,
-    ContactOps,
+    ChannelHandler,
+    ContactHandler,
     options::OptionsBuilder,
 };
 

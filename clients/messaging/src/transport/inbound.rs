@@ -1,21 +1,20 @@
 use log::trace;
 
 use super::prelude::*;
-use super::outbound::update_conversation;
 
 use crate::internal::{
     notification::{Body, Notification},
 };
 
 use crate::interfaces::{
-    ContactOps,
     MessageOps,
     MessageOriginated,
 };
 use crate::rpc::response::RpcResponse;
 use crate::{
+    ContactHandler,
     MessageType,
-    FriendRequest,
+    FriendRequestHandler,
 };
 
 use crate::internal::photon_message::PhotonMessage;
@@ -267,7 +266,7 @@ impl RpcServer {
         let Value::Bytes(payload) = &message.payload else {
             return Err(EncodingError::new("Notification payload is not binary"));
         };
-        self.process_notification(payload, from).await
+        self.process_notification(payload, from).await.map_err(|e|e.into())
     }
 
     async fn process_notification(&self, payload: &[u8], from: &Id) -> Result<()> {
@@ -648,7 +647,7 @@ impl RpcServer {
             SyncType::Delta => self.apply_delta(sync, &mut state)?,
             SyncType::UpToDate => unreachable!("handled above"),
         }
-        self.commit_contact_state(previous, state)
+        self.commit_contact_state(previous, state).map_err(|e| e.into())
     }
 
     /// Replaces the whole contact book with a snapshot.

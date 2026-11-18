@@ -19,14 +19,13 @@
 // SOFTWARE.
 
 use std::time::SystemTime;
-
 use boson_api::Id;
 
 // Represents a friend request in the messaging system.
 // A friend request captures the negotiation between two users to establish
 // a friendship, including the initiator, any greeting message, and its status.
 
-pub trait FriendRequest {
+pub trait FriendRequestHandler {
     /// Returns the identifier of the user involved in the friend request (the other side).
     fn user_id(&self) -> &Id;
 
@@ -56,8 +55,15 @@ pub trait FriendRequest {
     /// Returns the timestamp when this record last changed on this device: when the request was sent
     /// or received, or when it was accepted.
     fn updated(&self) -> SystemTime;
-
-
 }
 
-pub type BoxedFriendRequest = Box<dyn FriendRequest>;
+pub type FriendRequest = Box<dyn FriendRequestHandler>;
+
+// Receives events related to friend requests.
+pub trait FriendRequestListener: Send + Sync {
+    /// Called when a new friend request is received.
+    fn on_friend_request(&self, _user_id: &Id, _hello: Option<&str>) {}
+
+    /// Called when a previously sent friend request was accepted.
+    fn on_friend_request_accepted(&self, _user_id: &Id) {}
+}

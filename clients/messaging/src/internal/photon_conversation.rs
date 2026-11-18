@@ -28,15 +28,14 @@ use boson_api::{
     Id,
 };
 use crate::{
-    conversation::{Conversation, BoxedConversation},
+    conversation::{Conversation, ConversationHandler},
     invite_ticket::InviteTicket,
     message::Message,
-    contact::{Contact, BoxedContact, ContactType},
+    contact::{Contact, ContactHandler, ContactType},
 };
 
 use super::{
     SessionContext,
-    photon_contact::PhotonContact,
 };
 
 #[derive(Clone)]
@@ -136,12 +135,12 @@ impl Hash for PhotonConversation {
     }
 }
 
-impl Conversation for PhotonConversation {
+impl ConversationHandler for PhotonConversation {
     fn id(&self) -> &Id {
         self.contact.id()
     }
 
-    fn contact(&self) -> &BoxedContact {
+    fn contact(&self) -> &Contact {
         &self.contact
     }
 
@@ -159,14 +158,14 @@ impl Conversation for PhotonConversation {
     }
 }
 
-impl Into<BoxedConversation> for PhotonConversation {
-    fn into(self) -> BoxedConversation {
+impl Into<Conversation> for PhotonConversation {
+    fn into(self) -> Conversation {
         Box::new(self)
     }
 }
 
-impl Into<BoxedConversation> for Box<PhotonConversation> {
-    fn into(self) -> BoxedConversation {
+impl Into<Conversation> for Box<PhotonConversation> {
+    fn into(self) -> Conversation {
         self
     }
 }

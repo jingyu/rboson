@@ -18,19 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-mod channel;
-mod contact;
 mod message;
 mod message_originated;
 
 pub use {
-    channel::Channel as ChannelOps,
-    channel::ChannelMember as ChannelMemberOps,
-    channel::ChannelEditor as ChannelEditorOps,
-
-    contact::Contact as ContactOps,
-    contact::ContactEditor as ContactEditorOps,
-
     message::Message as MessageOps,
     message::MessageContent as MessageContentOps,
     message::MessageBuilder as MessageBuilderOps,

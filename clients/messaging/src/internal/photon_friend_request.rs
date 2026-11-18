@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 use boson_api::Id;
 use crate::{
     FriendRequest,
-    BoxedFriendRequest
+    FriendRequestHandler,
 };
 
 #[derive(Debug, Clone)]
@@ -132,7 +132,7 @@ impl PhotonFriendRequest {
     }
 }
 
-impl FriendRequest for PhotonFriendRequest {
+impl FriendRequestHandler for PhotonFriendRequest {
     fn user_id(&self) -> &Id {
         &self.user_id
     }
@@ -170,14 +170,14 @@ impl FriendRequest for PhotonFriendRequest {
     }
 }
 
-impl Into<BoxedFriendRequest> for PhotonFriendRequest {
-    fn into(self) -> BoxedFriendRequest {
+impl Into<FriendRequest> for PhotonFriendRequest {
+    fn into(self) -> FriendRequest {
         Box::new(self)
     }
 }
 
-impl Into<BoxedFriendRequest> for Box<PhotonFriendRequest> {
-    fn into(self) -> BoxedFriendRequest {
+impl Into<FriendRequest> for Box<PhotonFriendRequest> {
+    fn into(self) -> FriendRequest {
         self
     }
 }

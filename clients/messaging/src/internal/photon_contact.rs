@@ -27,11 +27,11 @@ use boson_api::{
     Error,
 };
 use crate::{
+    ContactHandler,
+    ContactEditorHandler,
     errors::EncodingError,
-    ContactOps,
     internal::ContactData,
     contact::ContactType,
-    ContactEditorOps,
 };
 
 
@@ -178,7 +178,7 @@ impl TryFrom<ContactData> for PhotonContact {
     }
 }
 
-impl ContactOps for PhotonContact {
+impl ContactHandler for PhotonContact {
     fn id(&self) -> &Id {
         &self.id
     }
@@ -219,11 +219,11 @@ impl ContactOps for PhotonContact {
         self.revision
     }
 
-    fn edit(&self) -> Box<dyn ContactEditorOps> {
-        Box::new(PhotonContactEditor(self.clone())) as Box<dyn ContactEditorOps>
+    fn edit(&self) -> Box<dyn ContactEditorHandler> {
+        Box::new(PhotonContactEditor(self.clone())) as Box<dyn ContactEditorHandler>
     }
 
-    fn clone_box(&self) -> Box<dyn ContactOps> {
+    fn clone_box(&self) -> Box<dyn ContactHandler> {
         Box::new(self.clone())
     }
 
@@ -234,34 +234,34 @@ impl ContactOps for PhotonContact {
 
 pub struct PhotonContactEditor(PhotonContact);
 
-impl ContactEditorOps for PhotonContactEditor {
-    fn remark(mut self: Box<Self>, remark: Option<String>) -> Box<dyn ContactEditorOps> {
+impl ContactEditorHandler for PhotonContactEditor {
+    fn remark(mut self: Box<Self>, remark: Option<String>) -> Box<dyn ContactEditorHandler> {
         self.0.remark = remark;
         self
     }
 
-    fn tags(mut self: Box<Self>, tags: Option<String>) -> Box<dyn ContactEditorOps> {
+    fn tags(mut self: Box<Self>, tags: Option<String>) -> Box<dyn ContactEditorHandler> {
         self.0.tags = tags;
         self
     }
 
-    fn muted(mut self: Box<Self>, muted: bool) -> Box<dyn ContactEditorOps> {
+    fn muted(mut self: Box<Self>, muted: bool) -> Box<dyn ContactEditorHandler> {
         self.0.muted = muted;
         self
     }
 
-    fn blocked(mut self: Box<Self>, blocked: bool) -> Box<dyn ContactEditorOps> {
+    fn blocked(mut self: Box<Self>, blocked: bool) -> Box<dyn ContactEditorHandler> {
         self.0.blocked = blocked;
         self
     }
 
-    fn build(mut self: Box<Self>) -> Box<dyn ContactOps> {
+    fn build(mut self: Box<Self>) -> Box<dyn ContactHandler> {
         self.0.updated_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
         self.0.revision += 1;
-        Box::new(self.0) as Box<dyn ContactOps>
+        Box::new(self.0) as Box<dyn ContactHandler>
     }
 }
 

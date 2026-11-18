@@ -21,16 +21,16 @@
 use std::time::SystemTime;
 
 use boson_api::{Result, Id};
-use crate::contact::BoxedContact;
+use crate::contact::Contact;
 
 /// A conversation between the local user and another party (person or channel).
 ///
-pub trait Conversation: Send + Sync {
+pub trait ConversationHandler: Send + Sync {
     /// The unique identifier of this conversation (same as the participant's `Id`).
     fn id(&self) -> &Id;
 
     /// The contact representing the other participant.
-    fn contact(&self) -> &BoxedContact;
+    fn contact(&self) -> &Contact;
 
     /// Whether this is a channel (group) conversation.
     fn is_channel(&self) -> bool;
@@ -42,4 +42,4 @@ pub trait Conversation: Send + Sync {
     fn updated_at(&self) -> Option<SystemTime>;
 }
 
-pub type BoxedConversation = Box<dyn Conversation>;
+pub type Conversation = Box<dyn ConversationHandler>;

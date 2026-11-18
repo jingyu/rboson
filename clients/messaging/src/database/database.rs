@@ -55,7 +55,7 @@ use super::{
     StoredMessage,
 };
 use crate::{
-    FriendRequest,
+    FriendRequestHandler,
     internal::PhotonContact,
 };
 use crate::internal::{

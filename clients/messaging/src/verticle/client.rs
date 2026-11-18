@@ -35,7 +35,7 @@ use crate::{
     internal::photon_friend_request::PhotonFriendRequest,
     invite_ticket::InviteTicket,
     Message,
-    FriendRequest,
+    FriendRequestHandler,
 };
 
 use super::{

@@ -32,11 +32,11 @@ use crate::{
     channel::{Channel, Permission, Role},
     Contact,
     SessionInfo,
-    BoxedFriendRequest,
+    FriendRequest,
     InviteTicket,
     Message,
     MessageBuilder,
-    BoxedConversation,
+    Conversation,
 };
 
 /// Default maximum number of messages returned by a range query.
@@ -89,10 +89,10 @@ pub trait MessagingClient {
     ) -> MessageBuilder;
 
     /// Retrieves a specific conversation by its identifier.
-    fn conversation(&self, id: &Id) -> impl Future<Output = Result<Option<BoxedConversation>>>;
+    fn conversation(&self, id: &Id) -> impl Future<Output = Result<Option<Conversation>>>;
 
     /// Retrieves all conversations for the local user.
-    fn conversations(&self) -> impl Future<Output = Result<Vec<BoxedConversation>>>;
+    fn conversations(&self) -> impl Future<Output = Result<Vec<Conversation>>>;
 
     /// Removes a conversation and all its associated messages.
     fn remove_conversation(&self, id: &Id) -> impl Future<Output = Result<()>>;
@@ -166,12 +166,12 @@ pub trait MessagingClient {
     fn get_friend_request(
         &self,
         user_id: &Id,
-    ) -> impl Future<Output = Result<Option<BoxedFriendRequest>>>;
+    ) -> impl Future<Output = Result<Option<FriendRequest>>>;
 
     /// Retrieves all pending / received friend requests.
     fn get_friend_requests(
         &self
-    ) -> impl Future<Output = Result<Vec<BoxedFriendRequest>>>;
+    ) -> impl Future<Output = Result<Vec<FriendRequest>>>;
 
     /// Removes a friend request by user `Id`.
     fn remove_friend_request(

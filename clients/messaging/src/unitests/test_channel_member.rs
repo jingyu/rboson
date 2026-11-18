@@ -23,7 +23,7 @@ use serde_cbor::Value;
 use boson_api::Id;
 use crate::channel::Role;
 use crate::internal::PhotonChannelMember;
-use crate::ChannelMemberOps;
+use crate::ChannelMemberHandler;
 
 #[test]
 fn test_invalid_values() {

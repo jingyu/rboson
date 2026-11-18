@@ -51,8 +51,8 @@ use crate::{
     session_info::SessionInfo,
     SessionListener,
     MessagingClient,
-    BoxedFriendRequest,
-    BoxedConversation,
+    FriendRequest,
+    Conversation,
 };
 
 use crate::internal::{
@@ -396,7 +396,7 @@ impl Client {
 
 #[cfg_attr(doc, doc = "Conversations API")]
 impl Client {
-    pub async fn conversation(&self, id: &Id) -> Result<Option<BoxedConversation>> {
+    pub async fn conversation(&self, id: &Id) -> Result<Option<Conversation>> {
         Ok(self.verticle_client()?
             .get_conversations(Some(*id))
             .await?
@@ -406,7 +406,7 @@ impl Client {
         )
     }
 
-    pub async fn conversations(&self) -> Result<Vec<BoxedConversation>> {
+    pub async fn conversations(&self) -> Result<Vec<Conversation>> {
         Ok(self.verticle_client()?
             .get_conversations(None)
             .await?
@@ -547,7 +547,7 @@ impl Client {
     }
 
     /// Looks up a single pending friend request.
-    pub async fn get_friend_request(&self, user_id: Id) -> Result<Option<BoxedFriendRequest>> {
+    pub async fn get_friend_request(&self, user_id: Id) -> Result<Option<FriendRequest>> {
         self.verticle_client()?
             .get_friend_request(user_id)
             .await
@@ -555,7 +555,7 @@ impl Client {
     }
 
     /// Lists every pending friend request.
-    pub async fn get_friend_requests(&self) -> Result<Vec<BoxedFriendRequest>> {
+    pub async fn get_friend_requests(&self) -> Result<Vec<FriendRequest>> {
         self.verticle_client()?
             .get_friend_requests()
             .await
@@ -866,11 +866,11 @@ impl MessagingClient for Client {
         self.message(recipient)
     }
 
-    async fn conversation(&self, id: &Id) -> Result<Option<BoxedConversation>> {
+    async fn conversation(&self, id: &Id) -> Result<Option<Conversation>> {
         self.conversation(id).await
     }
 
-    async fn conversations(&self) -> Result<Vec<BoxedConversation>> {
+    async fn conversations(&self) -> Result<Vec<Conversation>> {
         self.conversations().await
     }
 
@@ -931,11 +931,11 @@ impl MessagingClient for Client {
         self.accept_friend_request(*userid).await
     }
 
-    async fn get_friend_request(&self, user_id: &Id) -> Result<Option<BoxedFriendRequest>> {
+    async fn get_friend_request(&self, user_id: &Id) -> Result<Option<FriendRequest>> {
         self.get_friend_request(*user_id).await
     }
 
-    async fn get_friend_requests(&self) -> Result<Vec<BoxedFriendRequest>> {
+    async fn get_friend_requests(&self) -> Result<Vec<FriendRequest>> {
         self.get_friend_requests().await
     }
 

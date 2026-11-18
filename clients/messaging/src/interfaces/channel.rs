@@ -23,13 +23,13 @@ use std::time::SystemTime;
 use boson_api::Id;
 use crate::{
     channel::{Permission, Role},
-    interfaces::ContactOps,
+    ContactHandler
 };
 
 /// A channel contact – a group conversation on the boson network.
 ///
-/// Extends [`ContactOps`] with channel-specific information.
-pub trait Channel: ContactOps + Sync + Send {
+/// Extends [`ContactHandler`] with channel-specific information.
+pub trait Channel: ContactHandler + Sync + Send {
     /// The channel's join / invite permission policy.
     fn permission(&self) -> Permission;
 
@@ -63,7 +63,7 @@ pub trait Channel: ContactOps + Sync + Send {
 
     fn owner(&self) -> &Id;
     fn session_id(&self) -> &Id;
-    fn contact_box(&self) -> Box<dyn crate::ContactOps>;
+    fn contact_box(&self) -> Box<dyn crate::ContactHandler>;
     fn set_contact_revision(&mut self, revision: i32);
     fn set_owner(&mut self, owner: Id);
     fn set_session_id(&mut self, session_id: Id);

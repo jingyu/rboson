@@ -161,7 +161,7 @@ async fn wait_for_friend_request(
     user_id: Id,
     created_at: SystemTime,
     accepted: bool,
-) -> boson::messaging::BoxedFriendRequest {
+) -> boson::messaging::FriendRequest {
     time::timeout(Duration::from_secs(15), async {
         loop {
             if let Some(request) = client.get_friend_request(user_id).await.unwrap() {

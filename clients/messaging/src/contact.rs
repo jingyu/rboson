@@ -21,11 +21,8 @@
 use boson_api::{
     Result,
     Error,
+    Id,
     errors::ArgumentError,
-};
-use crate::{
-    ContactEditorOps,
-    ContactOps,
 };
 
 /// The type of a contact.
@@ -59,8 +56,72 @@ impl TryFrom<i32> for ContactType {
     }
 }
 
-pub type Contact = Box<dyn ContactOps>;
-pub type ContactEditor = Box<dyn ContactEditorOps>;
+/// A contact entry in the local contact list.
+///
+pub trait ContactHandler: Send + Sync {
+    /// The unique boson `Id` of this contact.
+    fn id(&self) -> &Id;
 
-pub type BoxedContact = Box<dyn ContactOps>;
-pub type BoxedContactEditor = Box<dyn ContactEditorOps>;
+    /// The type of this contact.
+    fn contact_type(&self) -> ContactType;
+
+    /// Display name, either the user-set remark or the contact's published name.
+    fn name(&self) -> Option<&str>;
+
+    /// User-defined remark (alias) for this contact.
+    fn remark(&self) -> Option<&str>;
+
+    /// User-defined tags attached to this contact.
+    fn tags(&self) -> Option<&str>;
+
+    /// Whether this contact has been muted.
+    fn is_muted(&self) -> bool;
+
+    /// Whether this contact has been blocked.
+    fn is_blocked(&self) -> bool;
+
+    /// Timestamp when this contact was first created locally, in milliseconds.
+    fn created_at(&self) -> i64;
+
+    /// Timestamp of the last update to this contact's record, in milliseconds.
+    fn updated_at(&self) -> i64;
+
+    /// Monotonically increasing revision counter for sync purposes.
+    fn revision(&self) -> i32;
+
+    /// Creates an editor that builds a new contact without mutating this one.
+    fn edit(&self) -> Box<dyn ContactEditorHandler>;
+
+    /// Clones this contact into a new boxed trait object.
+    fn clone_box(&self) -> Box<dyn ContactHandler>;
+
+    /// Updates the local revision counter.
+    fn set_revision(&mut self, revision: i32);
+}
+
+impl Clone for Box<dyn ContactHandler> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+// Builder for an immutable contact update.
+pub trait ContactEditorHandler: Send + Sync {
+    /// Set the user-defined remark (alias).
+    fn remark(self: Box<Self>, remark: Option<String>) -> Box<dyn ContactEditorHandler>;
+
+    /// Set the user-defined tags.
+    fn tags(self: Box<Self>, tags: Option<String>) -> Box<dyn ContactEditorHandler>;
+
+    /// Toggle the muted state.
+    fn muted(self: Box<Self>, muted: bool) -> Box<dyn ContactEditorHandler>;
+
+    /// Toggle the blocked state.
+    fn blocked(self: Box<Self>, blocked: bool) -> Box<dyn ContactEditorHandler>;
+
+    /// Build the updated immutable contact.
+    fn build(self: Box<Self>) -> Box<dyn ContactHandler>;
+}
+
+pub type Contact = Box<dyn ContactHandler>;
+pub type ContactEditor = Box<dyn ContactEditorHandler>;

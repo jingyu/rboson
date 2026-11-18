@@ -23,7 +23,7 @@ use serde::{Serialize, Deserialize};
 
 use boson_api::Id;
 use crate::channel::Role;
-use crate::interfaces::ChannelMemberOps;
+use crate::ChannelMemberHandler;
 use crate::internal::serde_utils::role;
 
 #[derive(Serialize, Deserialize)]
@@ -46,7 +46,7 @@ impl PhotonChannelMember {
     }
 }
 
-impl ChannelMemberOps for PhotonChannelMember {
+impl ChannelMemberHandler for PhotonChannelMember {
     fn id(&self) -> &Id {
         &self.id
     }
@@ -59,7 +59,7 @@ impl ChannelMemberOps for PhotonChannelMember {
         to_system_time(self.joined)
     }
 
-    fn clone_box(&self) -> Box<dyn crate::ChannelMemberOps> {
+    fn clone_box(&self) -> Box<dyn crate::ChannelMemberHandler> {
         Box::new(self.clone())
     }
 }
