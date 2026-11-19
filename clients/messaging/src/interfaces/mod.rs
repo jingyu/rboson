@@ -28,5 +28,5 @@ pub use {
 };
 
 pub(crate) use {
-    message_originated::MessageOriginated,
+    message_originated::{MessageOriginated, generate_id},
 };

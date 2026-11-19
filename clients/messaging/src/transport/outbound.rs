@@ -1,6 +1,8 @@
 use super::prelude::*;
 use super::mqtt;
 
+use crate::interfaces::MessageOriginated;
+
 pub(super) const FIELD_SESSION_KEY: &str = "sk";
 pub(super) const FIELD_OWNER: &str = "o";
 pub(super) const FIELD_PERMISSION: &str = "p";
@@ -142,7 +144,7 @@ impl RpcServer {
             Value::Bytes(payload.clone()),
         );
         message.payload_bytes = payload;
-        if let Err(error) = self.send_message_internal(&message).await {
+        if let Err(error) = self.send_message_internal(message).await {
             error!("Failed to send friend request to {userid}: {error}");
             let _ = self.remove_friend_request(&userid);
             return Err(error);
@@ -198,7 +200,7 @@ impl RpcServer {
         );
         message.payload_bytes = payload;
 
-        if let Err(error) = self.send_message_internal(&message).await {
+        if let Err(error) = self.send_message_internal(message).await {
             error!("Failed to send friend request accept to {userid}: {error}");
             return Err(error.into());
         }
@@ -1333,14 +1335,12 @@ pub(super) fn update_conversation(
     conversation.update(message)
 }
 
-
-
 impl RpcServer {
-    async fn send_message_internal(&self, message: &PhotonMessage) -> Result<()> {
+    async fn send_message_internal(&self, mut message: PhotonMessage) -> Result<()> {
         use crate::MessageOps;
 
         let payload = message.payload_as_bytes();
-        let encrypted_payload = if payload.is_empty() {
+        let encrypted = if payload.is_empty() {
             Vec::new()
         } else {
             match message.message_type() {
@@ -1364,7 +1364,7 @@ impl RpcServer {
                         self.user_identity
                             .encrypt_into(message.recipient(), payload)
                             .map_err(|error| {
-                                AuthenticationError::new(format!(
+                                EncodingError::new(format!(
                                     "Encrypting message payload failed: {error}"
                                 ))
                             })?
@@ -1380,23 +1380,15 @@ impl RpcServer {
                     .user_identity
                     .encrypt_into(message.recipient(), payload)
                     .map_err(|error| {
-                        AuthenticationError::new(format!(
+                        EncodingError::new(format!(
                             "Encrypting message payload failed: {error}"
                         ))
                     })?,
             }
         };
 
-        let encrypted = PhotonMessage::new(
-            message.version(),
-            *message.id(),
-            *message.recipient(),
-            message.message_type() as i32,
-            None,
-            message.created_at_u64(),
-            Value::Bytes(encrypted_payload),
-        );
-        let encoded = super::transport::to_cbor_bytes(&encrypted, "message")?;
+        message.set_payload(encrypted);
+        let encoded = message.serialize()?;
         let envelope = self
             .device_identity
             .encrypt_into(self.peer_id(), &encoded)
@@ -1421,25 +1413,25 @@ impl RpcServer {
         let timestamp = self.origin_timestamp();
         let method = request.method();
         let request = request.with_id(timestamp);
-        let body = serde_cbor::to_vec(&request)
-            .map_err(|error| EncodingError::new(format!("Encoding RPC request failed: {error}")))?;
+        let payload = request.serialize()?;
         let call = self
             .pending_calls
             .register(timestamp, method, *recipient)?;
 
+        let message_id = crate::interfaces::generate_id(self.device_identity.id(), timestamp);
         let mut message = PhotonMessage::new(
             MESSAGE_VERSION as i32,
-            Self::message_id(self.device_identity.id(), timestamp)?,
+            message_id,
             *recipient,
             MessageType::Control as i32,
             None,
             timestamp,
-            Value::Bytes(body.clone()),
+            Value::Bytes(payload.clone()),
         );
-        message.payload_bytes = body;
+        message.payload_bytes = payload;
 
         tokio::time::timeout(RPC_TIMEOUT, async {
-            self.send_message_internal(&message).await?;
+            self.send_message_internal(message).await?;
             call.await
         })
         .await

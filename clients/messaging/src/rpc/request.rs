@@ -21,8 +21,12 @@
 use serde::Serialize;
 use serde_cbor::Value;
 
-use boson_api::Id;
+use boson_api::{
+    Id,
+    Result
+};
 use crate::channel::Role;
+use crate::errors::EncodingError;
 use crate::internal::{
     ChannelSessionKeyRotation,
     ContactMutation,
@@ -91,6 +95,11 @@ impl RPCRequest {
 
     pub(crate) fn method(&self) -> Method {
         self.method
+    }
+
+    pub(crate) fn serialize(&self) -> Result<Vec<u8>> {
+        serde_cbor::to_vec(self)
+            .map_err(|error| EncodingError::new(format!("Encoding RPC request failed: {error}")).into())
     }
 
     pub(crate) fn list_sessions(id: i64) -> Self {

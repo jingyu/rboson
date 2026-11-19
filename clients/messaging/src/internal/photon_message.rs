@@ -28,6 +28,7 @@ use crate::{
     MessageContentOps,
     MessageOriginated,
     MessageType,
+    errors::EncodingError,
 };
 use super::photon_content::PhotonContent;
 
@@ -107,6 +108,10 @@ impl PhotonMessage {
         }
     }
 
+    pub(crate) fn set_payload(&mut self, payload: Vec<u8>) {
+        self.payload = Value::Bytes(payload.clone());
+    }
+
     pub(crate) fn set_converstation_id(&mut self, conv_id: Id) {
         self.conversation_id = Some(conv_id);
     }
@@ -151,6 +156,13 @@ impl PhotonMessage {
 
     pub(crate) fn received_at_u64(&self) -> Option<i64> {
         self.received_at
+    }
+
+    pub(crate) fn serialize(&self) -> boson_api::Result<Vec<u8>> {
+        serde_cbor::to_vec(self)
+            .map_err(|error| EncodingError::new(
+                format!("Serializing photon message failed: {error}")
+            ).into())
     }
 }
 
