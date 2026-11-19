@@ -88,10 +88,6 @@ impl RpcServer {
             .put_contact(self.contacts_revision.get(), &photon, session_key)
     }
 
-    fn to_photon_contact(contact: &Contact) -> Result<PhotonContact> {
-        Self::to_photon_contact_ops(contact.as_ref())
-    }
-
     pub(super) fn to_photon_contact_ops(
         contact: &dyn crate::ContactHandler,
     ) -> Result<PhotonContact> {
@@ -115,7 +111,7 @@ impl RpcServer {
         let boxed: Channel = Box::new(Self::to_photon_channel(channel)?);
         self.repository
             .borrow_mut()
-            .put_channel(self.contacts_revision.get(), &boxed, &key)
+            .store_channel(self.contacts_revision.get(), &boxed, &key)
     }
 
     fn session_context(
@@ -200,53 +196,15 @@ impl RpcServer {
     }
 
     pub(crate) async fn contact(&self, id: &Id) -> Option<PhotonContact> {
-        if let Some(contact) = self.contacts_cache.borrow().get(id).cloned() {
-            return Some(contact);
-        }
-
-        let stored = match self.repository.borrow_mut().load_contacts() {
-            Ok(contacts) => contacts.into_iter().find(|contact| contact.id == *id),
-            Err(error) => {
-                warn!("Failed to load contact {id}: {error}");
-                return None;
-            }
-        };
-        let Some(stored) = stored else {
-            return None;
-        };
-        match self.repository.borrow_mut().contact_from_stored(&stored) {
-            Ok(contact) => {
-                self.contacts_cache
-                    .borrow_mut()
-                    .insert(*id, contact.clone());
-                Some(contact)
-            }
-            Err(error) => {
-                warn!("Failed to decode contact {id}: {error}");
-                None
-            }
-        }
+        self.repository.borrow_mut().contact(id).ok().flatten()
     }
 
     pub(crate) async fn contacts(&self) -> Vec<PhotonContact> {
-        let stored = match self.repository.borrow_mut().load_contacts() {
-            Ok(contacts) => contacts,
-            Err(error) => {
-                warn!("Failed to load contacts: {error}");
-                Vec::new()
-            }
-        };
-        for stored in &stored {
-            match self.repository.borrow_mut().contact_from_stored(stored) {
-                Ok(contact) => {
-                    self.contacts_cache
-                        .borrow_mut()
-                        .insert(*contact.id(), contact);
-                }
-                Err(error) => warn!("Failed to decode contact: {error}"),
-            }
-        }
-        self.contacts_cache.borrow().values().cloned().collect()
+        self.repository
+            .borrow_mut()
+            .contacts()
+            .ok()
+            .unwrap_or_default()
     }
 
     pub(crate) async fn put_contact(&self, contact: &PhotonContact) -> Result<()> {
@@ -255,9 +213,6 @@ impl RpcServer {
         self.repository
             .borrow_mut()
             .put_contact(revision, contact, session_key.as_deref())?;
-        self.contacts_cache
-            .borrow_mut()
-            .insert(*contact.id(), contact.clone());
         Ok(())
     }
 
@@ -277,8 +232,10 @@ impl RpcServer {
         {
             warn!("Failed to remove contact {contact_id}: {error}");
         }
-        self.contacts_cache.borrow_mut().remove(contact_id);
-        self.channels_cache.borrow_mut().remove(contact_id);
+        self.repository
+            .borrow_mut()
+            .remove_channel(contact_id)
+            .ok();
         self.session_contexts.lock().unwrap().remove(contact_id);
     }
 
@@ -289,7 +246,7 @@ impl RpcServer {
         let mutation = ContactMutation::remove(revision, ids.to_vec());
         let request = RPCRequest::contact_mutate(0, mutation);
 
-        let result = self.send_control(self.peer_id(), request).await?;
+        let result = self.send_rpccall(self.peer_id(), request).await?;
         let confirmed = match result {
             ResponseParams::ContactMutate(confirmed) => confirmed,
             _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
@@ -331,7 +288,7 @@ impl RpcServer {
                 PhotonChannelMember::new(
                     *member.id(),
                     member.role(),
-                    member.joined().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+                    member.joined().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
                 )
             })
             .collect();
@@ -346,206 +303,70 @@ impl RpcServer {
         ))
     }
 
-    fn channel_from_stored(&self, stored: &crate::database::StoredChannel) -> Option<PhotonChannel> {
-        let contact = self
-            .repository
-            .borrow_mut()
-            .load_contacts()
-            .ok()?
-            .into_iter()
-            .find(|contact| contact.id == stored.id)?;
-
-        let session_id = self
-            .session_contexts
-            .lock()
-            .unwrap()
-            .get(&stored.id)
-            .map(|session| *session.session_id())
-            .or_else(|| {
-                let encrypted = contact.session_key()?;
-                let key = self
-                    .user_identity
-                    .decrypt_into(self.user_id(), encrypted)
-                    .ok()?;
-                let identity = CryptoIdentity::try_from(key.as_slice()).ok()?;
-                Some(*Identity::id(&identity))
-            })?;
-
-        let members = self
-            .repository
-            .borrow_mut()
-            .photon_channel_members(&stored.id)
-            .ok()?;
-
-        Some(PhotonChannel::new(
-            contact,
-            stored.owner,
-            session_id,
-            crate::channel::Permission::from_i32(stored.permission),
-            stored.notice.clone(),
-            stored.announce,
-            members,
-        ))
-    }
-
-    fn cache_channel(&self, channel: &PhotonChannel) {
-        self.channels_cache
-            .borrow_mut()
-            .insert(*channel.id(), channel.clone());
-    }
-
     pub(crate) async fn channel(&self, id: &Id) -> Option<PhotonChannel> {
-        if let Some(channel) = self.channels_cache.borrow().get(id).cloned() {
-            return Some(channel);
+        let mut channel = self.repository.borrow_mut().load_channel(id).ok().flatten()?;
+        if let Some(session) = self.session_contexts.lock().unwrap().get(id) {
+            channel.set_session_id(*session.session_id());
         }
-
-        let stored = match self.repository.borrow_mut().stored_channels() {
-            Ok(channels) => channels.into_iter().find(|channel| channel.id == *id),
-            Err(error) => {
-                warn!("Failed to load channel {id}: {error}");
-                return None;
-            }
-        };
-        let Some(stored) = stored else {
-            return None;
-        };
-        let channel = self.channel_from_stored(&stored)?;
-        self.cache_channel(&channel);
         Some(channel)
     }
 
     pub(crate) async fn channels(&self) -> Vec<PhotonChannel> {
-        let stored = match self.repository.borrow_mut().stored_channels() {
-            Ok(channels) => channels,
-            Err(error) => {
-                warn!("Failed to load channels: {error}");
-                Vec::new()
-            }
-        };
-        for stored in &stored {
-            if !self.channels_cache.borrow().contains_key(&stored.id) {
-                if let Some(channel) = self.channel_from_stored(stored) {
-                    self.cache_channel(&channel);
-                }
+        let mut channels = self
+            .repository
+            .borrow_mut()
+            .load_channels()
+            .unwrap_or_default();
+        let sessions = self.session_contexts.lock().unwrap();
+        for channel in &mut channels {
+            if let Some(session) = sessions.get(channel.id()) {
+                channel.set_session_id(*session.session_id());
             }
         }
-        self.channels_cache.borrow().values().cloned().collect()
+        channels
     }
 
-    pub(crate) async fn put_channel(&self, channel: &dyn crate::ChannelHandler) -> Result<()> {
-        let photon = Self::to_photon_channel(channel)?;
-        let session_key = self.persisted_session_key(photon.id())?;
-        let revision = self.contacts_revision.get();
-        let boxed: Channel = Box::new(photon.clone());
-        self.repository
-            .borrow_mut()
-            .put_channel(revision, &boxed, &session_key)?;
-        self.channels_cache
-            .borrow_mut()
-            .insert(*photon.id(), photon.clone());
-        self.contacts_cache
-            .borrow_mut()
-            .insert(*photon.id(), photon.photon_contact());
-        Ok(())
+    pub(crate) async fn put_channel(&self, channel: PhotonChannel) -> Result<()> {
+        self.repository.borrow_mut().put_channel(channel)
     }
 
     pub(crate) async fn remove_channel(&self, channel_id: &Id) {
-        if let Err(error) = self
-            .repository
-            .borrow_mut()
-            .remove_contact(self.contacts_revision.get(), channel_id)
-        {
+        if let Err(error) = self.repository.borrow_mut().remove_channel(channel_id) {
             warn!("Failed to remove channel {channel_id}: {error}");
         }
-        self.channels_cache.borrow_mut().remove(channel_id);
-        self.contacts_cache.borrow_mut().remove(channel_id);
         self.session_contexts.lock().unwrap().remove(channel_id);
     }
 
     pub(crate) async fn remove_channels(&self) {
-        let channel_ids = self
-            .channels_cache
-            .borrow()
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        for id in &channel_ids {
-            if let Err(error) = self
-                .repository
-                .borrow_mut()
-                .remove_contact(self.contacts_revision.get(), id)
-            {
-                warn!("Failed to remove channel {id}: {error}");
-            }
-            self.contacts_cache.borrow_mut().remove(id);
-            self.session_contexts.lock().unwrap().remove(id);
+        if let Err(error) = self.repository.borrow_mut().remove_channels() {
+            warn!("Failed to remove channels: {error}");
         }
-        self.channels_cache.borrow_mut().clear();
     }
 
     pub(crate) async fn conversation(&self, id: &Id) -> Option<PhotonConversation> {
-        if let Some(conversation) = self.conversations_cache.borrow().get(id).cloned() {
-            return Some(conversation);
-        }
-
-        match self.repository.borrow_mut().conversation(id) {
-            Ok(Some(conversation)) => {
-                self.conversations_cache
-                    .borrow_mut()
-                    .insert(*id, conversation.clone());
-                Some(conversation)
-            }
-            Ok(None) => None,
-            Err(error) => {
-                warn!("Failed to load conversation {id}: {error}");
-                None
-            }
-        }
+        self.repository
+            .borrow_mut()
+            .conversation(id)
+            .ok()
+            .flatten()
     }
 
     pub(crate) async fn conversations(&self) -> Vec<PhotonConversation> {
-        let stored = match self.repository.borrow_mut().load_conversations() {
-            Ok(conversations) => conversations,
-            Err(error) => {
-                warn!("Failed to load conversations: {error}");
-                Vec::new()
-            }
-        };
-
-        {
-            let mut cache = self.conversations_cache.borrow_mut();
-            for conversation in &stored {
-                cache.insert(*conversation.id(), conversation.clone());
-            }
-        }
-
-        let mut conversations = self
-            .conversations_cache
-            .borrow()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        conversations.sort_by(|left, right| {
-            left.updated_at()
-                .cmp(&right.updated_at())
-                .then_with(|| left.id().cmp(right.id()))
-        });
-        conversations
+        self.repository
+            .borrow_mut()
+            .load_conversations()
+            .unwrap_or_default()
     }
 
-    pub(crate) async fn put_conversation(&self, conversation: &PhotonConversation) -> Result<()> {
-        self.conversations_cache
-            .borrow_mut()
-            .insert(*conversation.id(), conversation.clone());
-        Ok(())
+    pub(crate) async fn put_conversation(&self, conversation: PhotonConversation) -> Result<()> {
+        self.repository.borrow_mut().put_conversation(conversation)
     }
 
     pub(crate) async fn remove_conversation(&self, id: &Id) -> Result<()> {
         self.repository
             .borrow_mut()
-            .remove_messages_in_conversation(id)?;
-        self.conversations_cache.borrow_mut().remove(id);
-        Ok(())
+            .remove_messages_in_conversation(id)
+            .map(|_| ())
     }
 
     pub(crate) async fn remove_conversations(&self, ids: &[Id]) -> Result<()> {
@@ -558,83 +379,50 @@ impl RpcServer {
     pub(crate) async fn clear_conversations(&self, id: &Id) -> Result<()> {
         self.repository
             .borrow_mut()
-            .remove_messages_in_conversation(id)?;
-        self.conversations_cache.borrow_mut().remove(id);
-        Ok(())
+            .remove_messages_in_conversation(id)
+            .map(|_| ())
     }
 
-    pub(crate) async fn friend_request(&self, id: &Id) -> Option<PhotonFriendRequest> {
-        if let Some(request) = self.friend_requests_cache.borrow().get(id).cloned() {
-            return Some(request);
-        }
-
-        match self.repository.borrow_mut().friend_request(id) {
-            Ok(Some(request)) => {
-                self.friend_requests_cache
-                    .borrow_mut()
-                    .insert(*id, request.clone());
-                Some(request)
-            }
-            Ok(None) => None,
-            Err(error) => {
-                warn!("Failed to load friend request {id}: {error}");
-                None
-            }
-        }
-    }
-
-    pub(crate) async fn friend_requests(&self) -> Vec<PhotonFriendRequest> {
-        match self.repository.borrow_mut().load_friend_requests() {
-            Ok(requests) => {
-                let mut cache = self.friend_requests_cache.borrow_mut();
-                for request in &requests {
-                    cache.insert(*request.user_id(), request.clone());
-                }
-                requests
-            }
-            Err(error) => {
-                warn!("Failed to load friend requests: {error}");
-                self.friend_requests_cache
-                    .borrow()
-                    .values()
-                    .cloned()
-                    .collect()
-            }
-        }
-    }
-
-    pub(crate) async fn put_friend_request(&self, request: &PhotonFriendRequest) -> Result<()> {
-       // let revision = self.contacts_revision.get();
+    pub(crate) fn friend_request(&self, id: &Id) -> Option<PhotonFriendRequest> {
         self.repository
             .borrow_mut()
-            .put_friend_request(request)?;
-        self.friend_requests_cache
-            .borrow_mut()
-            .insert(*request.user_id(), request.clone());
-        Ok(())
+            .load_friend_request(id)
+            .unwrap_or_default()
     }
 
-    pub(crate) async fn remove_friend_request(&self, user_id: &Id) -> Result<()> {
+    pub(crate) fn friend_requests(&self) -> Vec<PhotonFriendRequest> {
         self.repository
             .borrow_mut()
-            .remove_friend_request(user_id)?;
-
-        let _ = self.friend_requests_cache.borrow_mut().remove(user_id);
-        Ok(())
+            .load_friend_requests()
+            .unwrap_or_default()
     }
 
-    pub(crate) async fn remove_friend_requests(&self, user_ids: &[Id]) -> Result<()> {
+    pub(crate) fn put_friend_request(&self, request: &PhotonFriendRequest) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .put_friend_request(request)
+    }
+
+    pub(crate) fn remove_friend_request(&self, user_id: &Id) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .remove_friend_request(user_id)
+            .map(|_| ())
+    }
+
+    pub(crate) fn remove_friend_requests(&self, user_ids: &[Id]) -> Result<()> {
         for user_id in user_ids {
-            self.remove_friend_request(user_id).await?;
+            self.remove_friend_request(user_id)?;
         }
         Ok(())
     }
 
-    async fn _clear_friend_request(&self) -> Result<()> {
-        self.repository.borrow_mut().clear_friend_requests()?;
-        self.friend_requests_cache.borrow_mut().clear();
-        Ok(())
+    pub(crate) fn clear_friend_requests(&self) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .clear_friend_requests()
     }
+
 }
 
 mod prelude;

@@ -66,6 +66,6 @@ fn test_serde() {
         assert_eq!(decoded, member);
         assert_eq!(decoded.id(), member.id());
         assert_eq!(decoded.role(), role);
-        assert_eq!(decoded.joined(), std::time::UNIX_EPOCH + std::time::Duration::from_secs(12));
+        assert_eq!(decoded.joined(), std::time::UNIX_EPOCH + std::time::Duration::from_millis(12));
     }
 }

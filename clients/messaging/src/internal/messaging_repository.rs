@@ -31,6 +31,8 @@ use boson_api::{
     Result,
 };
 
+use crate::{ChannelHandler, ConversationHandler};
+use crate::internal::photon_channel::PhotonChannel;
 use crate::{
     channel::{
         Channel,
@@ -70,12 +72,14 @@ use crate::internal::{
 
 pub(crate) struct MessagingRepository {
     store: SqliteMessagingStore,
+    conversations: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Id, PhotonConversation>>>,
 }
 
 impl MessagingRepository {
     pub(crate) fn new() -> Self {
         Self {
             store: SqliteMessagingStore::new(),
+            conversations: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -143,6 +147,7 @@ impl MessagingRepository {
     }
 
     pub(crate) fn remove_messages_in_conversation(&mut self, conversation_id: &Id) -> Result<bool> {
+        self.conversations.lock().unwrap().remove(conversation_id);
         self.store.remove_messages_by_conversation(conversation_id)
     }
 
@@ -188,7 +193,7 @@ impl MessagingRepository {
         self.store.clear_contacts(revision)
     }
 
-    pub(crate) fn put_channel(
+    pub(crate) fn store_channel(
         &mut self,
         revision: i32,
         channel: &Channel,
@@ -202,6 +207,90 @@ impl MessagingRepository {
             .map(|member| member_to_stored(channel.id(), member))
             .collect();
         self.store.refill_channel_members(channel.id(), &members)
+    }
+
+    pub(crate) fn put_channel(&mut self, channel: PhotonChannel) -> Result<()> {
+        let session_key = channel
+            .photon_contact()
+            .session_key()
+            .map(ToOwned::to_owned)
+            .unwrap_or_default();
+        let revision = self.store.get_contacts_revision()?;
+        let boxed: Channel = Box::new(channel);
+        self.store_channel(revision, &boxed, &session_key)
+    }
+
+    pub(crate) fn contact(&mut self, contact_id: &Id) -> Result<Option<PhotonContact>> {
+        self.store.get_contact(contact_id)
+    }
+
+    pub(crate) fn contacts(&mut self) -> Result<Vec<PhotonContact>> {
+        self.load_contacts()
+    }
+
+    pub(crate) fn load_channel(&mut self, channel_id: &Id) -> Result<Option<PhotonChannel>> {
+        let Some(contact) = self.store.get_contact(channel_id)? else {
+            return Ok(None);
+        };
+        let Some(metadata) = contact.channel.clone() else {
+            return Ok(None);
+        };
+        let members = self.photon_channel_members(channel_id)?;
+        Ok(Some(PhotonChannel::new(
+            contact,
+            metadata.owner,
+            Id::default(),
+            crate::channel::Permission::try_from(metadata.permission)?,
+            metadata.notice,
+            metadata.announce,
+            members,
+        )))
+    }
+
+    pub(crate) fn load_channels(&mut self) -> Result<Vec<PhotonChannel>> {
+        let ids = self
+            .stored_channels()?
+            .into_iter()
+            .map(|channel| channel.id)
+            .collect::<Vec<_>>();
+        let mut channels = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(channel) = self.load_channel(&id)? {
+                channels.push(channel);
+            }
+        }
+        Ok(channels)
+    }
+
+    pub(crate) fn remove_channel(&mut self, channel_id: &Id) -> Result<()> {
+        let revision = self.store.get_contacts_revision()?;
+        self.remove_contact(revision, channel_id).map(|_| ())
+    }
+
+    pub(crate) fn remove_channels(&mut self) -> Result<()> {
+        let ids = self
+            .stored_channels()?
+            .into_iter()
+            .map(|channel| channel.id)
+            .collect::<Vec<_>>();
+        for id in &ids {
+            self.remove_channel(id)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn put_conversation(&mut self, conversation: PhotonConversation) -> Result<()> {
+        self.conversations
+            .lock()
+            .unwrap()
+            .insert(*conversation.id(), conversation);
+        Ok(())
+    }
+
+    pub(crate) fn conversations_handle(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Id, PhotonConversation>>> {
+        self.conversations.clone()
     }
 
     pub(crate) fn put_channel_members(
@@ -274,7 +363,7 @@ impl MessagingRepository {
             .get_friend_requests()
     }
 
-    pub(crate) fn friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>> {
+    pub(crate) fn load_friend_request(&mut self, user_id: &Id) -> Result<Option<PhotonFriendRequest>> {
         self.store
             .get_friend_request(user_id)
     }
@@ -320,14 +409,24 @@ impl MessagingRepository {
     }
 
     pub(crate) fn load_conversations(&mut self) -> Result<Vec<PhotonConversation>> {
-        self.store
+        let mut conversations = self
+            .store
             .get_all_conversations()?
             .into_iter()
             .map(stored_to_photon_conversation)
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        for (id, conversation) in self.conversations.lock().unwrap().iter() {
+            if !conversations.iter().any(|item| item.id() == id) {
+                conversations.push(conversation.clone());
+            }
+        }
+        Ok(conversations)
     }
 
     pub(crate) fn conversation(&mut self, id: &Id) -> Result<Option<PhotonConversation>> {
+        if let Some(conversation) = self.conversations.lock().unwrap().get(id) {
+            return Ok(Some(conversation.clone()));
+        }
         self.store
             .get_conversation(id)?
             .map(stored_to_photon_conversation)
@@ -391,7 +490,7 @@ fn stored_to_message(stored: StoredMessage) -> Result<PhotonMessage> {
         .map_err(|_| StateError::new("Invalid message version"))?;
     let message_type = u8::try_from(stored.message_type)
         .map_err(|_| StateError::new("Invalid message type"))?;
-    let created_at = u64::try_from(stored.created_at)
+    let created_at = i64::try_from(stored.created_at)
         .map_err(|_| StateError::new("Invalid message timestamp"))?;
 
     let mut message = PhotonMessage::new(
@@ -406,10 +505,10 @@ fn stored_to_message(stored: StoredMessage) -> Result<PhotonMessage> {
     message.set_rid(stored.rid);
     message.set_converstation_id(stored.conversation_id);
     if stored.sent_at > 0 {
-        message.set_sent(stored.sent_at as u64);
+        message.set_sent(stored.sent_at);
     }
     if stored.received_at > 0 {
-        message.set_received_at(stored.received_at as u64);
+        message.set_received_at(stored.received_at);
     }
     message.payload_bytes = payload;
     if !message.payload_bytes.is_empty() {

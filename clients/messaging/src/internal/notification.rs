@@ -80,7 +80,7 @@ pub(crate) struct Notification {
     #[serde(rename = "s")]
     source: Id,
     #[serde(rename = "t")]
-    timestamp: u64,
+    timestamp: i64,
     #[serde(flatten)]
     body: Body,
 }
@@ -94,7 +94,7 @@ impl Notification {
         &self.source
     }
 
-    pub(crate) fn timestamp(&self) -> u64 {
+    pub(crate) fn timestamp(&self) -> i64 {
         self.timestamp
     }
 
@@ -120,7 +120,7 @@ impl MessageOriginated for Notification {
         &self.id
     }
 
-    fn timestamp(&self) -> u64 {
+    fn timestamp(&self) -> i64 {
         self.timestamp
     }
 }

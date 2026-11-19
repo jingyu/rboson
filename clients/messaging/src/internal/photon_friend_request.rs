@@ -33,9 +33,9 @@ pub struct PhotonFriendRequest {
     hello: Option<String>,
     accepted: bool,
 
-    created_at: u64,
-    accepted_at: Option<u64>,
-    updated_at: u64,
+    created_at: i64,
+    accepted_at: Option<i64>,
+    updated_at: i64,
 }
 
 impl PhotonFriendRequest {
@@ -46,9 +46,9 @@ impl PhotonFriendRequest {
         initiator_id: Id,
         hello: Option<String>,
         accepted: bool,
-        created_at: u64,
-        accepted_at: Option<u64>,
-        updated_at: u64,
+        created_at: i64,
+        accepted_at: Option<i64>,
+        updated_at: i64,
     ) -> Self {
         Self {
             user_id,
@@ -65,7 +65,7 @@ impl PhotonFriendRequest {
         user_id: Id,
         initiator_id: Id,
         hello: Option<String>,
-        created_at: u64,
+        created_at: i64,
     ) -> Self {
         Self::new(
             user_id,
@@ -83,8 +83,8 @@ impl PhotonFriendRequest {
         user_id: Id,
         initiator_id: Id,
         hello: Option<String>,
-        sent_at: u64,
-        now: u64,
+        sent_at: i64,
+        now: i64,
     ) -> Self {
         Self {
             user_id,
@@ -98,10 +98,10 @@ impl PhotonFriendRequest {
     }
 
     pub(crate) fn accept_now(&mut self) {
-        self.accept(boson_api::as_ms!(SystemTime::now()) as u64);
+        self.accept(boson_api::as_ms!(SystemTime::now()) as i64);
     }
 
-    pub(crate) fn accept(&mut self, timestamp: u64) {
+    pub(crate) fn accept(&mut self, timestamp: i64) {
         self.accepted = true;
         self.accepted_at = Some(timestamp);
         self.updated_at = timestamp;
@@ -111,23 +111,23 @@ impl PhotonFriendRequest {
         if self.accepted {
             return false;
         }
-        let now = boson_api::as_ms!(time) as u64;
-        now.saturating_sub(self.created_at) >= Self::EXPIRATION.as_millis() as u64
+        let now = boson_api::as_ms!(time) as i64;
+        now.saturating_sub(self.created_at) >= Self::EXPIRATION.as_millis() as i64
     }
 
     pub fn is_expired(&self) -> bool {
         self.is_expired_at(SystemTime::now())
     }
 
-    pub fn created_at(&self) -> u64 {
+    pub fn created_at(&self) -> i64 {
         self.created_at
     }
 
-    pub fn accepted_at(&self) -> Option<u64> {
+    pub fn accepted_at(&self) -> Option<i64> {
         self.accepted_at.map(|v| v)
     }
 
-    pub fn updated_at(&self) -> u64 {
+    pub fn updated_at(&self) -> i64 {
         self.updated_at
     }
 }
@@ -158,15 +158,15 @@ impl FriendRequestHandler for PhotonFriendRequest {
     }
 
     fn created(&self) -> SystemTime {
-        boson_api::from_ms!(self.created_at)
+        boson_api::from_ms!(self.created_at as u64)
     }
 
     fn accepted(&self) -> Option<SystemTime> {
-        self.accepted_at.map(|value| boson_api::from_ms!(value))
+        self.accepted_at.map(|value| boson_api::from_ms!(value as u64))
     }
 
     fn updated(&self) -> SystemTime {
-        boson_api::from_ms!(self.updated_at)
+        boson_api::from_ms!(self.updated_at as u64)
     }
 }
 

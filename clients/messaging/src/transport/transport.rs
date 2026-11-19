@@ -36,7 +36,7 @@ pub(super) fn seal_for(
             })?,
         None => body,
     };
-    let created_at = u64::try_from(timestamp)
+    let created_at = i64::try_from(timestamp)
         .map_err(|_| EncodingError::new("Message timestamp is negative"))?;
     let message = PhotonMessage::new(
         MESSAGE_VERSION as i32,

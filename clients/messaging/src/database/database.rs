@@ -487,9 +487,9 @@ fn friend_request_from_row(row: FriendRequestRow) -> Result<PhotonFriendRequest>
         id_from(&row.initiator)?,
         row.hello,
         row.accepted != 0,
-        row.created_at as u64,
-        if row.accepted_at != 0 { Some(row.accepted_at as u64) } else { None },
-        row.updated_at as u64,
+        row.created_at,
+        if row.accepted_at != 0 { Some(row.accepted_at) } else { None },
+        row.updated_at,
     ))
 }
 

@@ -18,7 +18,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-pub(crate) mod async_cache;
 pub(crate) mod serde;
 pub(crate) mod handshake;
 pub(crate) mod notification;

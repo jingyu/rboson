@@ -326,7 +326,7 @@ impl RpcServer {
                         ));
                     }
 
-                    self.put_channel(self.channel_from_info(info)?.0.as_ref()).await?;
+                    self.put_channel(Self::to_photon_channel(self.decode_channel_info(info.clone())?.0.as_ref())?).await?;
                     self.channel(from).await
                         .map(|channel| Box::new(channel) as Channel)
                         .ok_or_else(|| {
@@ -361,7 +361,7 @@ impl RpcServer {
                 }
 
                 trace!("Channel {} created", channel_info.channel_id());
-                let (new_channel, _) = self.channel_from_info(channel_info)?;
+                let (new_channel, _) = self.decode_channel_info(channel_info.clone())?;
 
                 let channel: Channel = match self.channel(channel_info.channel_id()).await {
                     Some(v) => {
@@ -370,7 +370,7 @@ impl RpcServer {
                         Box::new(v)
                     }
                     None => {
-                        self.put_channel(new_channel.as_ref()).await?;
+                        self.put_channel(Self::to_photon_channel(new_channel.as_ref())?).await?;
                         new_channel
                     }
                 };
@@ -409,7 +409,7 @@ impl RpcServer {
             Body::ChannelJoin(info) => {
                 trace!("Channel {} joined", channel_id);
                 if self.channel(channel_id).await.is_none() {
-                    self.put_channel(channel.as_ref()).await?;
+                    self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 }
 
                 if info.members().is_empty() {
@@ -467,7 +467,7 @@ impl RpcServer {
                     .unwrap()
                     .insert(*channel_id, self.session_context(*channel_id, session, true));
 
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener.on_channel_session_key_rotated(&channel);
                 return Ok(());
             }
@@ -483,7 +483,7 @@ impl RpcServer {
                 };
                 let old_owner = *channel.owner();
                 channel.set_owner(*new_owner);
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener
                     .on_channel_ownership_transferred(&channel, &old_owner, new_owner);
                 return Ok(());
@@ -505,7 +505,7 @@ impl RpcServer {
                 if let Some(announced) = changes.get_announced() {
                     updated.set_announced(announced);
                 }
-                self.put_channel(updated.as_ref()).await?;
+                self.put_channel(Self::to_photon_channel(updated.as_ref())?).await?;
                 self.channel_listener.on_channel_updated(&updated);
             }
             Body::ChannelMembersRoleUpdate(update) => {
@@ -523,7 +523,7 @@ impl RpcServer {
                     }
                 };
                 let changed = channel.update_member_roles(update.member_ids(), update.role());
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener
                     .on_channel_members_role_updated(&channel, &changed);
                 return Ok(());
@@ -537,7 +537,7 @@ impl RpcServer {
                     }
                 };
                 let changed = channel.update_member_roles(ids, Role::Banned);
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener
                     .on_channel_members_banned(&channel, &changed);
                 return Ok(());
@@ -551,7 +551,7 @@ impl RpcServer {
                     }
                 };
                 let changed = channel.update_member_roles(ids, Role::Member);
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener
                     .on_channel_members_unbanned(&channel, &changed);
                 return Ok(());
@@ -565,7 +565,7 @@ impl RpcServer {
                     }
                 };
                 let removed = channel.remove_members(ids);
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener
                     .on_channel_members_removed(&channel, &removed);
                 return Ok(());
@@ -584,7 +584,7 @@ impl RpcServer {
                     }
                 };
                 channel.upsert_member(*member.id(), member.role(), member.joined());
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 self.channel_listener
                     .on_channel_member_joined(&channel, &(Box::new(member.clone()) as ChannelMember));
                 return Ok(());
@@ -599,7 +599,7 @@ impl RpcServer {
                 };
                 let member = channel.members().into_iter().find(|member| member.id() == id);
                 channel.remove_members(&[*id]);
-                self.channels_cache.borrow_mut().insert(*channel_id, Self::to_photon_channel(channel.as_ref())?);
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 if let Some(member) = member {
                     self.channel_listener
                         .on_channel_member_left(&channel, &member);
@@ -660,11 +660,23 @@ impl RpcServer {
             ));
         }
 
-        let previous = self.contacts_cache.borrow().clone();
+        let previous = self
+            .contacts()
+            .await
+            .into_iter()
+            .map(|contact| (*contact.id(), contact))
+            .collect::<HashMap<_, _>>();
+        let sessions = self.session_contexts.lock().unwrap().clone();
+        let channels = self
+            .channels()
+            .await
+            .into_iter()
+            .map(|channel| (*channel.id(), channel))
+            .collect::<HashMap<_, _>>();
         let mut state = ContactState {
             contacts: previous.clone(),
-            sessions: self.session_contexts.lock().unwrap().clone(),
-            channels: self.channels_cache.borrow().clone(),
+            sessions,
+            channels,
             revision,
         };
         match sync.kind() {
@@ -833,15 +845,42 @@ impl RpcServer {
             .cloned()
             .collect();
 
+        for id in &removed {
+            let _ = self.repository.borrow_mut().remove_contact_locally(id);
+        }
+        for (id, contact) in &state.contacts {
+            if contact.contact_type == ContactType::Channel as u8 {
+                if let Some(channel) = state.channels.get(id) {
+                    let session_key = match contact.session_key() {
+                        Some(key) => key.to_vec(),
+                        None => match state.sessions.get(id) {
+                            Some(session) => self
+                                .user_identity
+                                .encrypt_into(self.user_id(), session.private_key())?,
+                            None => Vec::new(),
+                        },
+                    };
+                    let boxed: Channel = Box::new(channel.clone());
+                    self.repository
+                        .borrow_mut()
+                        .store_channel(state.revision, &boxed, &session_key)?;
+                    continue;
+                }
+            }
+            self.repository.borrow_mut().put_contact(
+                state.revision,
+                contact,
+                contact.session_key(),
+            )?;
+        }
+
         *self.blocked_contacts.lock().unwrap() = state
             .contacts
             .values()
             .filter(|contact| contact.is_blocked())
             .map(|contact| *contact.id())
             .collect();
-        *self.contacts_cache.borrow_mut() = state.contacts;
         *self.session_contexts.lock().unwrap() = state.sessions;
-        *self.channels_cache.borrow_mut() = state.channels;
         self.contacts_revision.set(state.revision);
 
         if !removed.is_empty() {
@@ -971,9 +1010,8 @@ impl RpcServer {
             }
         }
 
-        let created_at = timestamp as u64;
-        if self.friend_request(&user_id).await
-            .is_some_and(|request| request.is_accepted() || request.created_at() >= created_at)
+        if self.friend_request(&user_id)
+            .is_some_and(|request| request.is_accepted() || request.created_at() >= timestamp)
         {
             debug!("Ignoring duplicate or stale friend request from {user_id}");
             return;
@@ -983,10 +1021,10 @@ impl RpcServer {
             user_id,
             initiator_id,
             Some(hello.clone()),
-            created_at,
+            timestamp,
         );
 
-        if let Err(error) = self.put_friend_request(&request).await {
+        if let Err(error) = self.put_friend_request(&request) {
             warn!("{error}");
         }
 
@@ -997,7 +1035,7 @@ impl RpcServer {
     }
 
     pub(super) async fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<PhotonFriendRequest> {
-        let Some(request) = self.friend_request(user_id).await else {
+        let Some(request) = self.friend_request(user_id) else {
             return Err(ArgumentError::new(format!("No friend request found for {user_id}")));
         };
 
@@ -1037,7 +1075,7 @@ impl RpcServer {
         let mut data = ContactData::new(
             *user_id,
             ContactType::Friend as u8,
-            Self::current_timestamp()?,
+            boson_api::as_ms!(SystemTime::now()) as i64,
         );
         data.set_session_key(self.user_identity.encrypt_into(
             self.user_id(),
@@ -1064,7 +1102,7 @@ impl RpcServer {
     ) {
         let _request = self.requests.lock().await;
 
-        if self.friend_request(&friend_id).await.is_some_and(|request| request.is_accepted()) {
+        if self.friend_request(&friend_id).is_some_and(|request| request.is_accepted()) {
             debug!("Ignoring duplicate friend request acceptance from {friend_id}");
             return;
         }
@@ -1080,7 +1118,7 @@ impl RpcServer {
                 return;
             }
         };
-        if (timestamp as u64)< request.created_at() {
+        if timestamp< request.created_at() {
             warn!("Friend request acceptance predates the request");
             return;
         }
@@ -1106,7 +1144,7 @@ impl RpcServer {
             return;
         }
 
-        let Some(mut request) = self.friend_request(&user_id).await else {
+        let Some(mut request) = self.friend_request(&user_id) else {
             return;
         };
 
@@ -1119,14 +1157,13 @@ impl RpcServer {
             &user_id
         };
 
-        let accepted_at = timestamp as u64;
-        if request.initiator_id() != initiator_id || accepted_at < request.created_at() {
+        if request.initiator_id() != initiator_id || timestamp < request.created_at() {
             warn!("Ignoring friend request acceptance from {user_id} that does not match the pending request");
             return;
         }
 
-        request.accept(accepted_at);
-        if let Err(error) = self.put_friend_request(&request).await {
+        request.accept(timestamp);
+        if let Err(error) = self.put_friend_request(&request) {
             warn!("Persisting accepted friend request failed: {error}");
         }
 
@@ -1216,7 +1253,7 @@ impl RpcServer {
         if let Err(error) = conversation.update(boxed_message.clone()) {
             warn!("Failed to update conversation: {error}");
         }
-        if let Err(error) = self.put_conversation(&conversation).await {
+        if let Err(error) = self.put_conversation(conversation.clone()).await {
             warn!("Failed to store conversation: {error}");
         }
         self.message_listener.on_message(&boxed_message);
@@ -1271,7 +1308,7 @@ impl RpcServer {
         if let Err(error) = conversation.update(boxed_message.clone()) {
             warn!("Failed to update conversation: {error}");
         }
-        if let Err(error) = self.put_conversation(&conversation).await {
+        if let Err(error) = self.put_conversation(conversation.clone()).await {
             warn!("Failed to store conversation: {error}");
         }
         self.message_listener.on_sent(&boxed_message);
@@ -1321,7 +1358,7 @@ impl RpcServer {
         if timestamp < 0 {
             return SystemTime::now();
         }
-        UNIX_EPOCH + Duration::from_millis(timestamp as u64)
+        boson_api::from_ms!(timestamp as u64)
     }
 
     pub(super) fn message_id(device_id: &Id, timestamp: i64) -> Result<Id> {
@@ -1347,7 +1384,7 @@ impl RpcServer {
         let request = RPCRequest::contact_sync(0, revision);
 
         // 3. Send it to the home peer and 4. decode the delta it reports.
-        let result = self.send_control(self.peer_id(), request).await?;
+        let result = self.send_rpccall(self.peer_id(), request).await?;
         let ResponseParams::ContactSync(sync) = result else {
             return Err(EncodingError::new("RPC result is not a contact sync").into());
         };
@@ -1368,7 +1405,7 @@ impl RpcServer {
         outdated: &str,
     ) -> Result<i32> {
         let request = RPCRequest::contact_mutate(0, mutation);
-        let result = self.send_control(self.peer_id(), request).await?;
+        let result = self.send_rpccall(self.peer_id(), request).await?;
         let ResponseParams::ContactMutate(revision) = result else {
             return Err(EncodingError::new("RPC result is not a contact revision").into());
         };
@@ -1391,9 +1428,9 @@ impl RpcServer {
     }
 }
 
-fn now_millis() -> u64 {
+fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
+        .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
 }

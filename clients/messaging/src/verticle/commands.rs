@@ -160,8 +160,8 @@ pub(super) fn handle(
         Event::GetFriendRequests(Body {params: id, result: promise}) => {
             respond(pending, promise, async move {
                 match id {
-                    Some(user_id) => Ok(rpc.friend_request(&user_id).await.into_iter().collect()),
-                    None => Ok(rpc.friend_requests().await)
+                    Some(user_id) => Ok(rpc.friend_request(&user_id).into_iter().collect()),
+                    None => Ok(rpc.friend_requests())
                 }
             });
         }
@@ -170,7 +170,7 @@ pub(super) fn handle(
             result: promise,
         }) => {
             respond(pending, promise, async move {
-                rpc.remove_friend_requests(&user_ids).await
+                rpc.remove_friend_requests(&user_ids)
             });
         }
         Event::ContentMessage(Body {

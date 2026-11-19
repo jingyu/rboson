@@ -448,6 +448,12 @@ impl IsDefault for u64 {
     }
 }
 
+impl IsDefault for i64 {
+    fn is_default(&self) -> bool {
+        *self == 0
+    }
+}
+
 impl IsDefault for f64 {
     fn is_default(&self) -> bool {
         *self == 0.0

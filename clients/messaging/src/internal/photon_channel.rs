@@ -244,7 +244,7 @@ impl ChannelHandler for PhotonChannel {
     fn upsert_member(&mut self, id: Id, role: Role, joined: SystemTime) {
         let joined = joined
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
+            .map(|duration| duration.as_millis() as u64)
             .unwrap_or(0);
         self.members.retain(|member| member.id() != &id);
         self.members.push(PhotonChannelMember::new(id, role, joined));
@@ -257,7 +257,7 @@ impl ChannelHandler for PhotonChannel {
                 let joined = member
                     .joined()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|duration| duration.as_secs())
+                    .map(|duration| duration.as_millis() as u64)
                     .unwrap_or(0);
                 *member = PhotonChannelMember::new(*member.id(), role, joined);
                 changed.push(Box::new(member.clone()) as Box<dyn ChannelMemberHandler>);

@@ -52,7 +52,6 @@ pub(crate) use crate::interfaces::{
 };
 
 pub(crate) use crate::internal::{
-    async_cache::AsyncCache,
     ChannelInfo,
     ChannelSessionKeyRotation,
     ContactData,

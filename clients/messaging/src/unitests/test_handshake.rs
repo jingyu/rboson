@@ -22,7 +22,7 @@ use crate::internal::handshake::*;
 
 #[test]
 fn test_friend_request() {
-    let timestamp = 42_u64;
+    let timestamp = 42_i64;
     let hello = Some("hello from the other side".to_string());
     let handshake = Handshake::friend_request(hello.clone(), timestamp);
 
@@ -42,7 +42,7 @@ fn test_friend_request() {
 
 #[test]
 fn test_friend_request_accept() {
-    let timestamp = 43_u64;
+    let timestamp = 43_i64;
     let session_key = vec![7_u8; 64];
     let handshake = Handshake::friend_request_accept(session_key.clone(), timestamp);
 

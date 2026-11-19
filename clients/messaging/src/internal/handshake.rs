@@ -40,7 +40,7 @@ pub(crate) enum HandshakeType {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Handshake {
     #[serde(rename = "t")]
-    pub(crate) timestamp: u64,
+    pub(crate) timestamp: i64,
 
     #[serde(flatten)]
     pub(crate) body: HandshakeType,
@@ -50,7 +50,7 @@ pub(crate) struct Handshake {
 }
 
 impl Handshake {
-    pub(crate) fn friend_request(hello: Option<String>, timestamp: u64) -> Self {
+    pub(crate) fn friend_request(hello: Option<String>, timestamp: i64) -> Self {
         Self {
             timestamp: timestamp,
             body: HandshakeType::FriendRequest(hello),
@@ -58,7 +58,7 @@ impl Handshake {
         }
     }
 
-    pub(crate) fn friend_request_accept(session_key: Vec<u8>, timestamp: u64) -> Self {
+    pub(crate) fn friend_request_accept(session_key: Vec<u8>, timestamp: i64) -> Self {
         Self {
             timestamp,
             body: HandshakeType::FriendRequestAccept(session_key),

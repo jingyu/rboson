@@ -34,12 +34,7 @@ pub(crate) struct RpcServer {
     pub(super) session_contexts: Arc<Mutex<HashMap<Id, SessionContext>>>,
     pub(super) blocked_contacts: Arc<Mutex<HashSet<Id>>>,
 
-    pub(super) repository: Rc<RefCell<MessagingRepository>>,
-
-    pub(super) friend_requests_cache: AsyncCache<PhotonFriendRequest>,
-    pub(super) channels_cache: AsyncCache<PhotonChannel>,
-    pub(super) contacts_cache: AsyncCache<PhotonContact>,
-    pub(super) conversations_cache: AsyncCache<PhotonConversation>,
+    pub(super) repository: RefCell<MessagingRepository>,
 
     pub(super) connection_listener: Arc<dyn ConnectionListener>,
     pub(super) message_listener: Arc<dyn MessageListener>,
@@ -56,7 +51,7 @@ impl RpcServer {
         let device_key = options.options.device_key().clone();
         let device_identity = CryptoIdentity::from(device_key);
 
-        let repository = Rc::new(RefCell::new(MessagingRepository::new()));
+        let repository = RefCell::new(MessagingRepository::new());
 
         Ok(Rc::new(Self {
             options: options.options,
@@ -82,12 +77,7 @@ impl RpcServer {
             session_contexts: Arc::new(Mutex::new(HashMap::new())),
             blocked_contacts: Arc::new(Mutex::new(HashSet::new())),
 
-            repository: repository.clone(),
-
-            friend_requests_cache: AsyncCache::new(repository.clone()),
-            channels_cache: AsyncCache::new(repository.clone()),
-            contacts_cache: AsyncCache::new(repository.clone()),
-            conversations_cache: AsyncCache::new(repository),
+            repository,
 
             connection_listener: options.connection_listener.clone(),
             message_listener: options.message_listener.clone(),
@@ -163,113 +153,60 @@ impl RpcServer {
     }
 
     fn restore_state(&self) -> Result<()> {
-        let (revision, stored_contacts, friend_requests, conversations) = {
+        let (revision, stored_contacts) = {
             let mut repository = self.repository.borrow_mut();
             (
                 repository.contacts_revision()?,
                 repository.load_contacts()?,
-                repository.load_friend_requests()?,
-                repository.load_conversations()?,
             )
         };
 
-        let mut contacts: HashMap<Id, PhotonContact> = HashMap::new();
         let mut sessions = HashMap::new();
-        let mut channels = HashMap::new();
+        let mut blocked = HashSet::new();
         for stored in stored_contacts {
-            let session = match stored.session_key() {
-                Some(key) => {
-                    let key = self.user_identity.decrypt_into(self.user_id(), key)?;
-                    let identity = CryptoIdentity::try_from(key.as_slice())?;
-                    Some(self.session_context(
+            if let Some(key) = stored.session_key() {
+                let key = self.user_identity.decrypt_into(self.user_id(), key)?;
+                let identity = CryptoIdentity::try_from(key.as_slice())?;
+                sessions.insert(
+                    stored.id,
+                    self.session_context(
                         stored.id,
                         identity,
                         stored.contact_type == ContactType::Channel as u8,
-                    ))
-                }
-                None => None,
-            };
-
-            if stored.contact_type == ContactType::Channel as u8 {
-                let Some(session) = session else {
-                    warn!("Skipping persisted channel {} without a session key", stored.id);
-                    continue;
-                };
-                let Some(metadata) = stored.channel.as_ref() else {
-                    warn!("Skipping persisted channel {} without metadata", stored.id);
-                    continue;
-                };
-                let contact = {
-                    let repo = self.repository.borrow();
-                    match repo.photon_contact_from_stored(&stored) {
-                        Ok(contact) => contact,
-                        Err(error) => {
-                            warn!("Skipping invalid persisted contact {}: {error}", stored.id);
-                            continue;
-                        }
-                    }
-                };
-                let members = self
-                    .repository
-                    .borrow_mut()
-                    .photon_channel_members(&stored.id)?;
-                let channel: Channel = Box::new(PhotonChannel::new(
-                    contact.clone(),
-                    metadata.owner,
-                    *session.session_id(),
-                    Permission::try_from(metadata.permission)?,
-                    metadata.notice.clone(),
-                    metadata.announce,
-                    members,
-                ));
-                sessions.insert(stored.id, session);
-                contacts.insert(stored.id, contact);
-                channels.insert(stored.id, Self::to_photon_channel(channel.as_ref())?);
-            } else {
-                let contact = {
-                    let repo = self.repository.borrow();
-                    match repo.contact_from_stored(&stored) {
-                        Ok(contact) => contact,
-                        Err(error) => {
-                            warn!("Skipping invalid persisted contact {}: {error}", stored.id);
-                            continue;
-                        }
-                    }
-                };
-                if let Some(session) = session {
-                    sessions.insert(stored.id, session);
-                }
-                contacts.insert(stored.id, contact);
+                    ),
+                );
+            }
+            if stored.is_blocked() {
+                blocked.insert(stored.id);
             }
         }
-
-        let blocked = contacts
-            .values()
-            .filter(|contact| contact.is_blocked())
-            .map(|contact| *contact.id())
-            .collect();
-        *self.contacts_cache.borrow_mut() = contacts;
         *self.session_contexts.lock().unwrap() = sessions;
-        *self.channels_cache.borrow_mut() = channels;
         *self.blocked_contacts.lock().unwrap() = blocked;
-        *self.friend_requests_cache.borrow_mut() = friend_requests
-            .into_iter()
-            .map(|request| (*request.user_id(), request))
-            .collect();
-        *self.conversations_cache.lock().unwrap() = conversations
-            .into_iter()
-            .map(|conversation| (*conversation.id(), conversation))
-            .collect();
         self.contacts_revision.set(revision);
         Ok(())
     }
 
     /// Reclaims expired local records; run periodically by the verticle timer.
     pub(crate) fn maintenance(&self) {
-        let mut requests = self.friend_requests_cache.borrow_mut();
-        let before = requests.len();
-        requests.retain(|_, request| !request.is_expired());
-        let removed = before - requests.len();
+        let requests = self
+            .repository
+            .borrow_mut()
+            .load_friend_requests()
+            .unwrap_or_default();
+        let mut removed = 0;
+        for request in requests {
+            if request.is_expired() {
+                if let Err(error) = self
+                    .repository
+                    .borrow_mut()
+                    .remove_friend_request(request.user_id())
+                {
+                    warn!("Failed to reclaim expired friend request: {error}");
+                } else {
+                    removed += 1;
+                }
+            }
+        }
         if removed > 0 {
             debug!("Reclaimed {removed} expired friend request(s)");
         }

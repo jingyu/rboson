@@ -62,7 +62,7 @@ fn request(user_id: Id, initiator_id: Id) -> PhotonFriendRequest {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64;
+        .as_millis() as i64;
     PhotonFriendRequest::create(user_id, initiator_id, Some("hello".into()), now)
 }
 
@@ -73,16 +73,16 @@ async fn friend_request_put_get_and_remove() {
     let initiator_id = *CryptoIdentity::new().id();
     let request = request(user_id, initiator_id);
 
-    server.put_friend_request(&request).await.unwrap();
+    server.put_friend_request(&request).unwrap();
 
-    let loaded = server.friend_request(&user_id).await.unwrap();
+    let loaded = server.friend_request(&user_id).unwrap();
     assert_eq!(*loaded.user_id(), user_id);
     assert_eq!(*loaded.initiator_id(), initiator_id);
     assert_eq!(loaded.hello(), Some("hello"));
 
-    server.remove_friend_request(&user_id).await.unwrap();
-    assert!(server.friend_request(&user_id).await.is_none());
-    assert!(server.friend_requests().await.is_empty());
+    server.remove_friend_request(&user_id).unwrap();
+    assert!(server.friend_request(&user_id).is_none());
+    assert!(server.friend_requests().is_empty());
 }
 
 #[tokio::test]
@@ -91,13 +91,12 @@ async fn friend_requests_reads_repository_and_cache() {
     let first = request(*CryptoIdentity::new().id(), *CryptoIdentity::new().id());
     let second = request(*CryptoIdentity::new().id(), *CryptoIdentity::new().id());
 
-    server.put_friend_request(&first).await.unwrap();
-    server.put_friend_request(&second).await.unwrap();
+    server.put_friend_request(&first).unwrap();
+    server.put_friend_request(&second).unwrap();
 
-    assert_eq!(server.friend_requests().await.len(), 2);
+    assert_eq!(server.friend_requests().len(), 2);
 
-    server.friend_requests_cache.clear();
-    let loaded = server.friend_requests().await;
+    let loaded = server.friend_requests();
     assert_eq!(loaded.len(), 2);
     assert!(loaded.iter().any(|request| request.user_id() == first.user_id()));
     assert!(loaded.iter().any(|request| request.user_id() == second.user_id()));
@@ -108,29 +107,28 @@ async fn remove_friend_requests_removes_all_and_reports_errors() {
     let server = server();
     let first = request(*CryptoIdentity::new().id(), *CryptoIdentity::new().id());
     let second = request(*CryptoIdentity::new().id(), *CryptoIdentity::new().id());
-    server.put_friend_request(&first).await.unwrap();
-    server.put_friend_request(&second).await.unwrap();
+    server.put_friend_request(&first).unwrap();
+    server.put_friend_request(&second).unwrap();
 
     server
         .remove_friend_requests(&[*first.user_id(), *second.user_id()])
-        .await
         .unwrap();
 
-    assert!(server.friend_requests().await.is_empty());
-    assert!(server.friend_request(first.user_id()).await.is_none());
-    assert!(server.friend_request(second.user_id()).await.is_none());
+    assert!(server.friend_requests().is_empty());
+    assert!(server.friend_request(first.user_id()).is_none());
+    assert!(server.friend_request(second.user_id()).is_none());
 }
 
 #[tokio::test]
 async fn clear_friend_request_clears_repository_and_cache() {
     let server = server();
     let request = request(*CryptoIdentity::new().id(), *CryptoIdentity::new().id());
-    server.put_friend_request(&request).await.unwrap();
+    server.put_friend_request(&request).unwrap();
 
-    server.clear_friend_request().await.unwrap();
+    server.clear_friend_requests().unwrap();
 
-    assert!(server.friend_requests().await.is_empty());
-    assert!(server.friend_request(request.user_id()).await.is_none());
+    assert!(server.friend_requests().is_empty());
+    assert!(server.friend_request(request.user_id()).is_none());
 }
 
 fn conversation(user_id: Id) -> PhotonConversation {
@@ -148,7 +146,7 @@ async fn conversation_put_get_and_remove() {
     let user_id = *CryptoIdentity::new().id();
     let conversation = conversation(user_id);
 
-    server.put_conversation(&conversation).await.unwrap();
+    server.put_conversation(conversation.clone()).await.unwrap();
 
     let loaded = server.conversation(&user_id).await.unwrap();
     assert_eq!(*loaded.id(), user_id);
@@ -164,8 +162,8 @@ async fn conversations_merge_repository_and_cache() {
     let first = conversation(*CryptoIdentity::new().id());
     let second = conversation(*CryptoIdentity::new().id());
 
-    server.put_conversation(&first).await.unwrap();
-    server.put_conversation(&second).await.unwrap();
+    server.put_conversation(first.clone()).await.unwrap();
+    server.put_conversation(second.clone()).await.unwrap();
 
     let conversations = server.conversations().await;
     assert_eq!(conversations.len(), 2);
@@ -178,8 +176,8 @@ async fn remove_conversations_removes_all() {
     let server = server();
     let first = conversation(*CryptoIdentity::new().id());
     let second = conversation(*CryptoIdentity::new().id());
-    server.put_conversation(&first).await.unwrap();
-    server.put_conversation(&second).await.unwrap();
+    server.put_conversation(first.clone()).await.unwrap();
+    server.put_conversation(second.clone()).await.unwrap();
 
     server
         .remove_conversations(&[*first.id(), *second.id()])
@@ -195,8 +193,8 @@ async fn clear_conversations_clears_one_conversation() {
     let server = server();
     let first = conversation(*CryptoIdentity::new().id());
     let second = conversation(*CryptoIdentity::new().id());
-    server.put_conversation(&first).await.unwrap();
-    server.put_conversation(&second).await.unwrap();
+    server.put_conversation(first.clone()).await.unwrap();
+    server.put_conversation(second.clone()).await.unwrap();
 
     server.clear_conversations(first.id()).await.unwrap();
 
@@ -241,7 +239,7 @@ async fn contacts_merge_repository_and_cache() {
     assert!(contacts.iter().any(|contact| contact.id() == second.id()));
 }
 
-fn channel(user_id: Id, owner: Id, session_id: Id) -> Channel {
+fn channel(user_id: Id, owner: Id, session_id: Id) -> crate::internal::PhotonChannel {
     let contact = crate::internal::photon_contact::PhotonContact::new(
         user_id,
         crate::contact::ContactType::Channel,
@@ -256,10 +254,10 @@ fn channel(user_id: Id, owner: Id, session_id: Id) -> Channel {
         false,
         Vec::new(),
     );
-    Box::new(channel)
+    channel
 }
 
-fn install_channel(server: &RpcServer, channel: &Channel) {
+fn install_channel(server: &RpcServer, channel: &crate::internal::PhotonChannel) {
     let session = CryptoIdentity::new();
     server.session_contexts.lock().unwrap().insert(
         *channel.id(),
@@ -276,7 +274,7 @@ async fn channel_put_get_and_remove() {
     let channel = channel(user_id, owner, session_id);
     install_channel(&server, &channel);
 
-    server.put_channel(channel.as_ref()).await.unwrap();
+    server.put_channel(channel.clone()).await.unwrap();
 
     let loaded = server.channel(&user_id).await.unwrap();
     assert_eq!(*loaded.id(), user_id);
@@ -302,8 +300,8 @@ async fn channels_lists_cached_channels() {
     );
     install_channel(&server, &first);
     install_channel(&server, &second);
-    server.put_channel(first.as_ref()).await.unwrap();
-    server.put_channel(second.as_ref()).await.unwrap();
+    server.put_channel(first.clone()).await.unwrap();
+    server.put_channel(second.clone()).await.unwrap();
 
     let channels = server.channels().await;
     assert_eq!(channels.len(), 2);
@@ -326,8 +324,8 @@ async fn remove_channels_clears_cached_channels() {
     );
     install_channel(&server, &first);
     install_channel(&server, &second);
-    server.put_channel(first.as_ref()).await.unwrap();
-    server.put_channel(second.as_ref()).await.unwrap();
+    server.put_channel(first.clone()).await.unwrap();
+    server.put_channel(second.clone()).await.unwrap();
 
     server.remove_channels().await;
 
@@ -335,3 +333,4 @@ async fn remove_channels_clears_cached_channels() {
     assert!(server.channel(first.id()).await.is_none());
     assert!(server.channel(second.id()).await.is_none());
 }
+

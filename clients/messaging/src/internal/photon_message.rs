@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::time::SystemTime;
+use std::{time::SystemTime};
 use serde::{Serialize, Deserialize};
 use serde_cbor::Value;
 
@@ -60,7 +60,7 @@ pub(crate) struct PhotonMessage {
         default,
         skip_serializing_if = "utils::is_default"
     )]
-    created_at: u64,
+    created_at: i64,
 
     #[serde(rename = "p")]
     pub(crate) payload: Value,
@@ -69,9 +69,9 @@ pub(crate) struct PhotonMessage {
     #[serde(skip)]
     rid: i64,
     #[serde(skip)]
-    received_at: Option<u64>,
+    received_at: Option<i64>,
     #[serde(skip)]
-    sent_at: Option<u64>,
+    sent_at: Option<i64>,
     #[serde(skip)]
     pub(crate)  payload_bytes: Vec<u8>,
     #[serde(skip)]
@@ -87,7 +87,7 @@ impl PhotonMessage {
         recipient: Id,
         message_type: i32,
         from: Option<Id>,
-        created_at: u64,
+        created_at: i64,
         payload: Value,
     ) -> Self {
         Self {
@@ -115,16 +115,16 @@ impl PhotonMessage {
         self.from = Some(from);
     }
 
-    pub(crate) fn set_sent(&mut self, sent_at: u64) {
+    pub(crate) fn set_sent(&mut self, sent_at: i64) {
         self.sent_at = Some(sent_at);
     }
 
-    pub(crate) fn set_received_at(&mut self, received_at: u64) {
+    pub(crate) fn set_received_at(&mut self, received_at: i64) {
         self.received_at = Some(received_at);
     }
 
     pub(crate) fn set_received(&mut self) {
-        self.received_at = Some(boson_api::as_ms!(SystemTime::now()) as u64);
+        self.received_at = Some(boson_api::as_ms!(SystemTime::now()) as i64);
     }
 
     pub(crate) fn set_rid(&mut self, rid: i64) {
@@ -141,15 +141,15 @@ impl PhotonMessage {
         self.version
     }
 
-    pub(crate) fn created_at_u64(&self) -> u64 {
+    pub(crate) fn created_at_u64(&self) -> i64 {
         self.created_at
     }
 
-    pub(crate) fn sent_at_u64(&self) -> Option<u64> {
+    pub(crate) fn sent_at_u64(&self) -> Option<i64> {
         self.sent_at
     }
 
-    pub(crate) fn received_at_u64(&self) -> Option<u64> {
+    pub(crate) fn received_at_u64(&self) -> Option<i64> {
         self.received_at
     }
 }
@@ -159,7 +159,7 @@ impl MessageOriginated for PhotonMessage {
         &self.id
     }
 
-    fn timestamp(&self) -> u64 {
+    fn timestamp(&self) -> i64 {
         self.created_at
     }
 }
@@ -190,15 +190,15 @@ impl MessageOps for PhotonMessage {
     }
 
     fn created_at(&self) -> SystemTime {
-        boson_api::from_ms!(self.created_at)
+        boson_api::from_ms!(self.created_at as u64)
     }
 
     fn received_at(&self) -> Option<SystemTime> {
-        self.received_at.map(|ts| boson_api::from_ms!(ts))
+        self.received_at.map(|ts| boson_api::from_ms!(ts as u64))
     }
 
     fn sent_at(&self) -> Option<SystemTime> {
-        self.sent_at.map(|ts| boson_api::from_ms!(ts))
+        self.sent_at.map(|ts| boson_api::from_ms!(ts as u64))
     }
 
     fn payload_as_bytes(&self) -> &[u8] {

@@ -56,17 +56,12 @@ impl ChannelMemberHandler for PhotonChannelMember {
     }
 
     fn joined(&self) -> SystemTime {
-        to_system_time(self.joined)
+        boson_api::from_ms!(self.joined)
     }
 
     fn clone_box(&self) -> Box<dyn crate::ChannelMemberHandler> {
         Box::new(self.clone())
     }
-}
-
-#[inline]
-fn to_system_time(secs: u64) -> SystemTime {
-    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)
 }
 
 #[cfg(test)]
