@@ -227,11 +227,21 @@ async fn clear_contacts(first: &Client, second: &Client) {
 }
 
 async fn reset_clients(first: &Client, second: &Client) {
+    clear_conversations(first).await;
+    clear_conversations(second).await;
     clear_friend_requests(first, second).await;
     clear_contacts(first, second).await;
 }
 
+async fn clear_conversations(client: &Client) {
+    let conversations = client.conversations().await.unwrap_or_default();
+    for conversation in conversations {
+        assert!(client.remove_conversation(conversation.id()).await.is_ok());
+    }
+}
+
 async fn reset_client(client: &Client) {
+    clear_conversations(client).await;
     assert!(client.clear_friend_requests().await.is_ok());
     assert!(client.clear_contacts().await.is_ok());
 }

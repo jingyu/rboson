@@ -34,10 +34,6 @@ use boson_api::{
     PromiseFuture,
     Result,
 };
-use crate::errors::{
-    AuthenticationError,
-    EncodingError,
-};
 use super::{
     method::Method,
     response::{Params, RpcResponse},
@@ -97,28 +93,25 @@ impl Calls {
     }
 
     pub(crate) fn respond(&self, response: RpcResponse, from: &Id) -> Result<()> {
-        let rsp_id = response.id();
+        let response_id = response.id();
         let method = response.method();
 
-        let call = self.pending.borrow_mut().remove(&rsp_id);
+        let call = self.pending.borrow_mut().remove(&response_id);
         let Some(call) = call else {
-            debug!("Ignoring RPC response {} without a pending call",rsp_id);
+            debug!("Ignoring RPC response {} without a pending call",response_id);
             return Ok(());
         };
-
         if &call.recipient != from {
-            return Err(AuthenticationError::new(
+            return Err(StateError::new(
                 "RPC response sender does not match request recipient",
             ));
         }
-
         if call.method != method {
-            return Err(EncodingError::new(format!(
+            return Err(StateError::new(format!(
                 "RPC response method '{:?}' does not match '{:?}'",
                 method, call.method
-            )).into())
+            )))
         }
-
         call.promise.complete(response.result());
         Ok(())
     }

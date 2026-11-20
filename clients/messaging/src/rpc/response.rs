@@ -126,17 +126,6 @@ impl Params {
             _ => Err(malformed().into()),
         }
     }
-
-    /// The touched members of a member-management result.
-    pub(crate) fn into_members(self) -> Result<Vec<Id>> {
-        match self {
-            Self::ChannelMembersRoleUpdate(ids)
-            | Self::ChannelMembersBan(ids)
-            | Self::ChannelMembersUnban(ids)
-            | Self::ChannelMembersRemove(ids) => Ok(ids),
-            _ => Err(EncodingError::new("RPC result is not a member list").into()),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]

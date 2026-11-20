@@ -276,12 +276,12 @@ async fn channel_put_get_and_remove() {
 
     server.put_channel(channel.clone()).await.unwrap();
 
-    let loaded = server.channel(&user_id).await.unwrap();
+    let loaded = server.channel(&user_id).unwrap();
     assert_eq!(*loaded.id(), user_id);
     assert_eq!(*loaded.owner(), owner);
 
     server.remove_channel(&user_id).await;
-    assert!(server.channel(&user_id).await.is_none());
+    assert!(server.channel(&user_id).is_none());
     assert!(server.channels().await.is_empty());
 }
 
@@ -330,7 +330,7 @@ async fn remove_channels_clears_cached_channels() {
     server.remove_channels().await;
 
     assert!(server.channels().await.is_empty());
-    assert!(server.channel(first.id()).await.is_none());
-    assert!(server.channel(second.id()).await.is_none());
+    assert!(server.channel(first.id()).is_none());
+    assert!(server.channel(second.id()).is_none());
 }
 

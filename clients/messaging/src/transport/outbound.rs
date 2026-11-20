@@ -1,41 +1,11 @@
 use super::prelude::*;
 use super::mqtt;
 
-use crate::interfaces::MessageOriginated;
-
 pub(super) const FIELD_SESSION_KEY: &str = "sk";
 pub(super) const FIELD_OWNER: &str = "o";
 pub(super) const FIELD_PERMISSION: &str = "p";
 pub(super) const FIELD_NOTICE: &str = "nt";
 pub(super) const FIELD_ANNOUNCED: &str = "a";
-
-#[derive(Clone, Copy)]
-enum MemberUpdate {
-    /// Assign the given role.
-    Role(Role),
-    /// Mark as banned.
-    Ban,
-    /// Restore the default role.
-    Unban,
-    /// Drop from the channel.
-    Remove,
-}
-
-impl MemberUpdate {
-    /// Applies the update to `channel` and returns the members that changed.
-    fn apply(self, channel: &mut Channel, touched: &[Id]) -> Vec<ChannelMember> {
-        match self {
-            MemberUpdate::Role(role) => Self::reassign(channel, touched, role),
-            MemberUpdate::Ban => Self::reassign(channel, touched, Role::Banned),
-            MemberUpdate::Unban => Self::reassign(channel, touched, Role::Member),
-            MemberUpdate::Remove => channel.remove_members(touched),
-        }
-    }
-
-    fn reassign(channel: &mut Channel, touched: &[Id], role: Role) -> Vec<ChannelMember> {
-        channel.update_member_roles(touched, role)
-    }
-}
 
 impl RpcServer {
     /// Reads a page of history. Not implemented yet.
@@ -290,7 +260,7 @@ impl RpcServer {
         // 1. Validate and build the contact to sync.
         let revision = self.contacts_revision.get();
         let now = boson_api::as_ms!(SystemTime::now()) as i64;
-        let (mut data, existing) = match self.contact(user_id).await {
+        let (data, existing) = match self.contact(user_id).await {
             Some(contact) => {
                 if contact.contact_type() == ContactType::Channel {
                     return Err(ArgumentError::new(format!(
@@ -354,14 +324,14 @@ impl RpcServer {
         let session = CryptoIdentity::random();
         let session_id = session.id();
 
-        let bytes_key = session.signature_key().private_key().as_bytes();
-        let encoded_key = self
+        let session_key = session.signature_key().private_key().as_bytes();
+        let encrypted_key = self
             .user_identity
-            .encrypt_into(self.user_id(), bytes_key)?;
+            .encrypt_into(self.user_id(), session_key)?;
 
         let new_channel_info = NewChannelInfo::new(
             *session_id,
-            encoded_key,
+            encrypted_key,
             permission,
             Some(name.clone()),
             notice.clone(),
@@ -373,6 +343,10 @@ impl RpcServer {
         let ResponseParams::ChannelCreate(result) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
+
+       // let channel = Box::new(PhotonChannel::from(result, session_key));
+       // let identity = CryptoIdentity::try_from(session_key.as_slice())?;
+       // let _ = self.session_context(channel.session_id(), identity, true);
 
         let (channel, returned_session) = self.decode_channel_info(result)?;
         if channel.owner() != self.user_id() || channel.session_id() != session.id() {
@@ -389,7 +363,9 @@ impl RpcServer {
     }
 
     pub(crate) async fn delete_channel(&self, channel_id: &Id) -> Result<()> {
-        let channel = self.channel_snapshot(channel_id)?;
+        let Some(channel) = self.channel(channel_id).map(|v| Box::new(v) as Channel) else {
+            return Err(StateError::new(format!("Channel {channel_id} does not exist")).into());
+        };
         if channel.owner() != self.user_id() {
             return Err(StateError::new("Only the owner can delete the channel"));
         }
@@ -410,7 +386,6 @@ impl RpcServer {
 
         if self
             .channel(ticket.channel_id())
-            .await
             .is_some_and(|channel| channel.has_member(self.user_id()))
         {
             return Err(StateError::new("Already joined the channel").into());
@@ -465,7 +440,9 @@ impl RpcServer {
     }
 
     pub(crate) async fn leave_channel(&self, channel_id: &Id) -> Result<()> {
-        let channel = self.channel_snapshot(channel_id)?;
+        let Some(channel) = self.channel(channel_id).map(|v| Box::new(v) as Channel) else {
+            return Err(StateError::new("Channel not found").into());
+        };
         if channel.owner() == self.user_id() {
             return Err(StateError::new("The owner cannot leave the channel"));
         }
@@ -485,8 +462,6 @@ impl RpcServer {
         channel_id: &Id,
         invitee: Option<Id>,
     ) -> Result<InviteTicket> {
-        self.channel_snapshot(channel_id)?;
-
         let request = RPCRequest::get_channel_info(0);
         let result = self.send_rpccall(channel_id, request).await?;
         let ResponseParams::ChannelInfo(info) = result else {
@@ -543,33 +518,17 @@ impl RpcServer {
         .map_err(|e| e.into())
     }
 
-    pub(super) fn channel_snapshot(&self, id: &Id) -> Result<Channel> {
-        let mut channel = self
-            .repository
-            .borrow_mut()
-            .load_channel(id)
-            .ok()
-            .flatten()
-            .ok_or_else(|| StateError::new(format!("Channel {id} does not exist")))?;
-        if let Some(session) = self.session_contexts.lock().unwrap().get(id) {
-            channel.set_session_id(*session.session_id());
-        }
-        Ok(Box::new(channel) as Channel)
-    }
-
     pub(super) fn decode_channel_info(&self, info: ChannelInfo) -> Result<(Channel, SessionContext)> {
-        let created_at = info.created_at();
-        let updated_at = info.updated_at();
-        if updated_at < created_at {
+        if info.updated_at() < info.created_at() {
             return Err(EncodingError::new("Invalid channel timestamps"));
         }
 
         for member in info.members() {
             member.joined()
             .duration_since(UNIX_EPOCH)
-            .map(|_| ())
             .map_err(|_| EncodingError::new("Channel member timestamp is out of range"))?;
         }
+
         let session = match info.session_key() {
             Some(key) => {
                 let key = self.user_identity.decrypt_into(self.user_id(), key)?;
@@ -589,11 +548,9 @@ impl RpcServer {
                 "Channel session key does not match session ID",
             ));
         }
-        let mut data = ContactData::new(*info.channel_id(), ContactType::Channel as u8, created_at as i64);
-        data.name = info.name().map(ToString::to_string);
-        data.updated_at = updated_at as i64;
+
         let channel: Channel = Box::new(PhotonChannel::new(
-            PhotonContact::try_from(data)?,
+            PhotonContact::try_from(&info)?,
             *info.owner_id(),
             *info.session_id(),
             info.permission(),
@@ -672,12 +629,12 @@ impl RpcServer {
         channel_id: &Id,
         new_owner: Id,
     ) -> Result<()> {
-        let mut channel = self.channel_snapshot(channel_id)?;
-        Self::ensure_channel_owner(
-            &channel,
-            self.user_id(),
-            "Only the channel owner can transfer ownership"
-        )?;
+        let Some(mut channel) = self.channel(channel_id).map(|v| Box::new(v) as Box<dyn ChannelHandler>) else {
+            return Err(StateError::new("Channel not found").into());
+        };
+        if channel.owner() != self.user_id() {
+            return Err(StateError::new("Only the channel owner can transfer ownership"));
+        }
 
         let target = channel
             .member(&new_owner)
@@ -710,12 +667,12 @@ impl RpcServer {
     }
 
     pub(crate) async fn rotate_channel_session_key(&self, channel_id: &Id) -> Result<()> {
-        let mut channel = self.channel_snapshot(channel_id)?;
-        Self::ensure_channel_owner(
-            &channel,
-            self.user_id(),
-            "Only the channel owner can rotate the session key",
-        )?;
+        let Some(mut channel) = self.channel(channel_id).map(|v| Box::new(v) as Box<dyn ChannelHandler>) else {
+            return Err(StateError::new("Channel not found").into());
+        };
+        if channel.owner() != self.user_id() {
+            return Err(StateError::new("Only the channel owner can rotate the session key"));
+        }
 
         let keypair = signature::KeyPair::random();
         let encrypted_key = {
@@ -753,12 +710,12 @@ impl RpcServer {
     }
 
     pub(crate) async fn update_channel_info(&self, channel: &Channel) -> Result<()> {
-        let mut current = self.channel_snapshot(channel.id())?;
-        Self::ensure_channel_owner(
-            &current,
-            self.user_id(),
-            "Only the channel owner can update channel information"
-        )?;
+        let Some(mut current) = self.channel(channel.id()) else {
+            return Err(StateError::new("Channel not found").into());
+        };
+        if channel.owner() != self.user_id() {
+            return Err(StateError::new("Only the channel owner can update channel information"));
+        }
 
         let mut changes = ChannelInfoUpdate::new();
         if current.permission() != channel.permission() {
@@ -789,9 +746,9 @@ impl RpcServer {
         current.set_notice(channel.notice().map(ToString::to_string));
         current.set_announced(channel.is_announced());
         current.set_updated_at(boson_api::as_ms!(SystemTime::now()) as i64);
-        let contact = Self::to_photon_contact_ops(current.contact_box().as_ref())?;
+        // let contact = Self::to_photon_contact_ops(current.contact_box().as_ref())?;
         self.persist_channel(current.as_ref())?;
-        self.channel_listener.on_channel_updated(&current);
+        //self.channel_listener.on_channel_updated(&current);
         Ok(())
     }
 
@@ -801,42 +758,52 @@ impl RpcServer {
         members: &[Id],
         role: Role,
     ) -> Result<()> {
-        let mut channel = self.channel_snapshot(channel_id)?;
-        Self::ensure_channel_moderator(&channel, self.user_id())?;
+        let Some(mut channel) = self.channel(channel_id) else {
+            return Err(StateError::new("Channel not found").into());
+        };
+        if !channel
+            .member(self.user_id())
+            .is_some_and(|member| member.is_owner() || member.is_moderator())
+        {
+            return Err(StateError::new(
+                "Only a channel owner or moderator can manage members",
+            ).into());
+        }
 
         let request = RPCRequest::update_channel_members_role(0, members.to_vec(), role);
         let result = self.send_rpccall(channel_id, request).await?;
-        let touched = result.into_members()?;
+        let ids = match result {
+            ResponseParams::ChannelMembersRoleUpdate(ids) => ids,
+            _ => return Err(StateError::new("Unexpected response").into()),
+        };
 
-        let changed = MemberUpdate::Role(role).apply(&mut channel, &touched);
+        let _ = channel.update_member_roles(&ids, role);
         self.persist_channel(channel.as_ref())?;
-
-        if changed.is_empty() {
-            return Ok(())
-        }
-
-        self.channel_listener
-            .on_channel_members_role_updated(&channel, &changed);
         Ok(())
     }
 
     pub(crate) async fn ban_channel_members(&self, channel_id: &Id, members: &[Id]) -> Result<()> {
-        let mut channel = self.channel_snapshot(channel_id)?;
-        Self::ensure_channel_moderator(&channel, self.user_id())?;
+        let Some(mut channel) = self.channel(channel_id) else {
+            return Err(StateError::new("Channel not found").into());
+        };
+        if !channel
+            .member(self.user_id())
+            .is_some_and(|member| member.is_owner() || member.is_moderator())
+        {
+            return Err(StateError::new(
+                "Only a channel owner or moderator can manage members",
+            ).into());
+        }
 
         let request = RPCRequest::ban_channel_members(0, members.to_vec());
         let result = self.send_rpccall(channel_id, request).await?;
-        let touched = result.into_members()?;
+        let ids = match result {
+            ResponseParams::ChannelMembersBan(ids) => ids,
+            _ => return Err(StateError::new("Unexpected response").into()),
+        };
 
-        let changed = MemberUpdate::Ban.apply(&mut channel, &touched);
+        let _ = channel.update_member_roles(&ids, Role::Banned);
         self.persist_channel(channel.as_ref())?;
-
-        if changed.is_empty() {
-            return Ok(())
-        }
-
-        self.channel_listener
-            .on_channel_members_banned(&channel, &changed);
         Ok(())
     }
 
@@ -845,22 +812,28 @@ impl RpcServer {
         channel_id: &Id,
         members: &[Id],
     ) -> Result<()> {
-        let mut channel = self.channel_snapshot(channel_id)?;
-        Self::ensure_channel_moderator(&channel, self.user_id())?;
+        let Some(mut channel) = self.channel(channel_id) else {
+            return Err(StateError::new("Channel is not existed").into());
+        };
+        if !channel
+            .member(self.user_id())
+            .is_some_and(|member| member.is_owner() || member.is_moderator())
+        {
+            return Err(StateError::new(
+                "Only a channel owner or moderator can manage members",
+            ).into());
+        }
 
         let request = RPCRequest::unban_channel_members(0, members.to_vec());
         let result = self.send_rpccall(channel_id, request).await?;
-        let touched = result.into_members()?;
 
-        let changed = MemberUpdate::Unban.apply(&mut channel, &touched);
+        let ids = match result {
+            ResponseParams::ChannelMembersUnban(ids) => ids,
+            _ => return Err(StateError::new("Unexpected response").into()),
+        };
+
+        let _ = channel.update_member_roles(&ids, Role::Member);
         self.persist_channel(channel.as_ref())?;
-
-        if changed.is_empty() {
-            return Ok(());
-        }
-
-        self.channel_listener
-            .on_channel_members_unbanned(&channel, &changed);
 
         Ok(())
     }
@@ -870,46 +843,28 @@ impl RpcServer {
         channel_id: &Id,
         members: &[Id],
     ) -> Result<()> {
-        let mut channel = self.channel_snapshot(channel_id)?;
-        Self::ensure_channel_moderator(&channel, self.user_id())?;
-
-        let request = RPCRequest::remove_channel_members(0, members.to_vec());
-
-        let result = self.send_rpccall(channel_id, request).await?;
-        let touched = result.into_members()?;
-
-        let changed = MemberUpdate::Remove.apply(&mut channel, &touched);
-        self.persist_channel(channel.as_ref())?;
-
-        if changed.is_empty() {
-            return Ok(());
-        }
-
-        self.channel_listener
-            .on_channel_members_removed(&channel, &changed);
-        Ok(())
-    }
-
-    fn ensure_channel_moderator(channel: &Channel, user_id: &Id) -> Result<()> {
+        let Some(mut channel) = self.channel(channel_id) else {
+            return Err(StateError::new("Channel not found").into());
+        };
         if !channel
-            .member(user_id)
+            .member(self.user_id())
             .is_some_and(|member| member.is_owner() || member.is_moderator())
         {
             return Err(StateError::new(
                 "Only a channel owner or moderator can manage members",
-            ));
+            ).into());
         }
-        Ok(())
-    }
 
-    fn ensure_channel_owner(
-        channel: &Channel,
-        user_id: &Id,
-        description: &str,
-    ) -> Result<()> {
-        if channel.owner() != user_id {
-            return Err(StateError::new(description));
-        }
+        let request = RPCRequest::remove_channel_members(0, members.to_vec());
+
+        let result = self.send_rpccall(channel_id, request).await?;
+        let ids = match result {
+            ResponseParams::ChannelMembersRemove(ids) => ids,
+            _ => return Err(StateError::new("Unexpected response").into()),
+        };
+
+        let _ = channel.remove_members(&ids);
+        self.persist_channel(channel.as_ref())?;
         Ok(())
     }
 
@@ -974,7 +929,9 @@ impl RpcServer {
         }
         let mut updated = data.contact(next_revision)?;
         let opaque = if origin.contact_type() == ContactType::Channel {
-            let channel = self.channel_snapshot(contact.id())?;
+            let Some(channel) = self.channel(contact.id()).map(|v| Box::new(v) as Channel) else {
+                return Err(StateError::new("Channel not found").into());
+            };
             let key = key.ok_or_else(|| StateError::new("Channel session key is missing"))?;
             let Value::Map(mut document) = to_cbor(&data, "channel contact")? else {
                 return Err(EncodingError::new("Channel contact is not a map").into());
@@ -1003,7 +960,7 @@ impl RpcServer {
 
         // 5. Apply the confirmed change to the local state.
         updated.set_revision(confirmed);
-        if let Some(mut channel) = self.channel(updated.id()).await {
+        if let Some(mut channel) = self.channel(updated.id()) {
             channel.set_name(updated.name().map(ToString::to_string));
             channel.set_updated_at(updated.updated_at());
             channel.set_contact_revision(updated.revision());
@@ -1014,7 +971,7 @@ impl RpcServer {
         } else {
             self.blocked_contacts.lock().unwrap().remove(updated.id());
         }
-        if let Some(channel) = self.channel(updated.id()).await {
+        if let Some(channel) = self.channel(updated.id()) {
             self.persist_channel(&channel)?;
         } else {
             let session_key = self.persisted_session_key(updated.id()).ok();
@@ -1138,30 +1095,6 @@ pub(crate) struct SessionMessageBuilder {
     headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
     text: bool,
-}
-
-impl SessionMessageBuilder {
-    fn seal(
-        &self,
-        recipient: &Id,
-        message_type: u8,
-        timestamp: i64,
-        body: Vec<u8>,
-        inner: Option<&Id>,
-        what: &str,
-    ) -> Result<(PhotonMessage, Vec<u8>)> {
-        super::transport::seal_for(
-            &self.user_identity,
-            &self.device_identity,
-            &self.peer_id,
-            recipient,
-            message_type,
-            timestamp,
-            body,
-            inner,
-            what,
-        )
-    }
 }
 
 impl MessageBuilderOps for SessionMessageBuilder {

@@ -33,7 +33,7 @@ use crate::{
     internal::ContactData,
     contact::ContactType,
 };
-
+use super::ChannelInfo;
 
 #[derive(Debug, Clone, Eq, Serialize, Deserialize)]
 pub struct PhotonContact {
@@ -141,6 +141,27 @@ impl PhotonContact {
 impl PartialEq for PhotonContact {
     fn eq(&self, other: &Self) -> bool {
         self.is(other)
+    }
+}
+
+impl TryFrom<&ChannelInfo> for PhotonContact {
+    type Error = Error;
+
+    fn try_from(info: &ChannelInfo) -> Result<Self> {
+        Ok(Self {
+            id: *info.channel_id(),
+            contact_type: ContactType::Channel as u8,
+            session_key: None,
+            name: info.name().map(ToString::to_string),
+            remark: None,
+            tags: None,
+            muted: false,
+            blocked: false,
+            created_at: info.created_at(),
+            updated_at: info.updated_at(),
+            revision: 0,
+            channel: None,
+        })
     }
 }
 

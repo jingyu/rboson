@@ -20,8 +20,15 @@
 
 use serde::{Serialize, Deserialize};
 
-use boson_api::{utils, Id};
-use crate::Permission;
+use boson_api::{
+    utils,
+    Id,
+    Result
+};
+use crate::{
+    Permission,
+    errors::EncodingError,
+};
 use super::{
     PhotonChannelMember,
     serde_utils::permission
@@ -61,10 +68,10 @@ pub(crate) struct ChannelInfo {
     announce: bool,
 
     #[serde(rename = "c", default)]
-    created_at: u64,
+    created_at: i64,
 
     #[serde(rename = "u", default)]
-    updated_at: u64,
+    updated_at: i64,
 
     #[serde(
         rename = "m",
@@ -107,16 +114,28 @@ impl ChannelInfo {
         self.announce
     }
 
-    pub(crate) fn created_at(&self) -> u64 {
+    pub(crate) fn created_at(&self) -> i64 {
         self.created_at
     }
 
-    pub(crate) fn updated_at(&self) -> u64 {
+    pub(crate) fn updated_at(&self) -> i64 {
         self.updated_at
     }
 
     pub(crate) fn members(&self) -> &[PhotonChannelMember] {
         &self.members
+    }
+
+     pub(crate) fn serialize(&self) -> Result<Vec<u8>> {
+        serde_cbor::to_vec(self).map_err(|e|
+            EncodingError::new(&format!("serializing channel info error: {e}")).into()
+        )
+    }
+
+    pub(crate) fn deserialize(payload: &[u8]) -> Result<Self> {
+        serde_cbor::from_slice(payload).map_err(|e|
+            EncodingError::new(&format!("deserializing channel info error: {e}")).into()
+        )
     }
 }
 

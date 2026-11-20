@@ -169,6 +169,8 @@ impl RpcServer {
         publish: Publish,
     ) -> Result<(Topic, PhotonMessage)> {
         if publish.payload.len() > MAX_INCOMING_PACKET_SIZE {
+            error!("Ignored MQTT message on '{}': payload {} exceeds incoming packet size limit {}",
+                 publish.topic, publish.payload.len(), MAX_INCOMING_PACKET_SIZE);
             return Err(EncodingError::new(
                 &format!("Ignored MQTT message on '{}': payload exceeds incoming packet size limit",
                  publish.topic

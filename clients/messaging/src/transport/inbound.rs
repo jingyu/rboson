@@ -158,7 +158,7 @@ impl RpcServer {
                         AuthenticationError::new(format!("Decrypting {message_type:?} failed: {error}"))
                     })?
                 } else {
-                    let channel = self.channel(&recipient).await.ok_or_else(|| {
+                    let channel = self.channel(&recipient).ok_or_else(|| {
                         StateError::new(format!("Received a {message_type:?} from unknown channel {recipient}"))
                     })?;
                     if channel.is_blocked() {
@@ -311,7 +311,7 @@ impl RpcServer {
         if self.peer_id() == from {
             self.process_peer_notification(notif).await
         } else {
-            let channel: Channel = match self.channel(from).await {
+            let channel: Channel = match self.channel(from) {
                 Some(c) => Box::new(c),
                 None => {
                     let Body::ChannelJoin(info) = notif.body() else {
@@ -327,7 +327,7 @@ impl RpcServer {
                     }
 
                     self.put_channel(Self::to_photon_channel(self.decode_channel_info(info.clone())?.0.as_ref())?).await?;
-                    self.channel(from).await
+                    self.channel(from)
                         .map(|channel| Box::new(channel) as Channel)
                         .ok_or_else(|| {
                             StateError::new(&format!("Failed to create channel contact for {from}"))
@@ -363,7 +363,7 @@ impl RpcServer {
                 trace!("Channel {} created", channel_info.channel_id());
                 let (new_channel, _) = self.decode_channel_info(channel_info.clone())?;
 
-                let channel: Channel = match self.channel(channel_info.channel_id()).await {
+                let channel: Channel = match self.channel(channel_info.channel_id()) {
                     Some(v) => {
                         trace!("Channel {} already exists, ignoring duplicate create channel notification",
                             channel_info.channel_id());
@@ -408,7 +408,7 @@ impl RpcServer {
             }
             Body::ChannelJoin(info) => {
                 trace!("Channel {} joined", channel_id);
-                if self.channel(channel_id).await.is_none() {
+                if self.channel(channel_id).is_none() {
                     self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
                 }
 
@@ -432,12 +432,9 @@ impl RpcServer {
             Body::ChannelSessionKeyRotate(encrypted_key) => {
                 trace!("Channel {} session key rotation", channel_id);
 
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 if notif.source() != channel.owner() {
                     warn!("Channel session key rotation has an unauthorized source");
@@ -474,12 +471,9 @@ impl RpcServer {
             Body::ChannelOwnershipTransfer(new_owner) => {
                 trace!("Channel {} ownership transfer", channel_id);
                 /*
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 let old_owner = *channel.owner();
                 channel.set_owner(*new_owner);
@@ -492,7 +486,7 @@ impl RpcServer {
             Body::ChannelInfoUpdate(changes) => {
                 trace!("Channel {} info updated ", channel.id());
 
-                let mut updated = self.channel_snapshot(channel_id)?;
+                let mut updated = self.channel(channel_id).map(|v| Box::new(v) as Channel).unwrap();
                 if let Some(permission) = changes.get_permission() {
                     updated.set_permission(permission);
                 }
@@ -515,12 +509,9 @@ impl RpcServer {
                     update.member_ids()
                 );
 
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 let changed = channel.update_member_roles(update.member_ids(), update.role());
                 self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
@@ -529,12 +520,9 @@ impl RpcServer {
                 return Ok(());
             }
             Body::ChannelMembersBan(ids) => {
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 let changed = channel.update_member_roles(ids, Role::Banned);
                 self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
@@ -543,12 +531,9 @@ impl RpcServer {
                 return Ok(());
             }
             Body::ChannelMembersUnban(ids) => {
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 let changed = channel.update_member_roles(ids, Role::Member);
                 self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
@@ -557,12 +542,9 @@ impl RpcServer {
                 return Ok(());
             }
             Body::ChannelMembersRemove(ids) => {
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 let removed = channel.remove_members(ids);
                 self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
@@ -576,12 +558,9 @@ impl RpcServer {
                     return Ok(());
                 }
 
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
                 channel.upsert_member(*member.id(), member.role(), member.joined());
                 self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
@@ -590,13 +569,11 @@ impl RpcServer {
                 return Ok(());
             }
             Body::ChannelMemberLeave(id) => {
-                let mut channel = match self.channel_snapshot(&channel_id) {
-                    Ok(channel) => channel,
-                    Err(error) => {
-                        warn!("Failed to get channel snapshot: {error}");
-                        return Ok(());
-                    }
+                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
+                    warn!("Failed to get channel snapshot");
+                    return Ok(());
                 };
+
                 let member = channel.members().into_iter().find(|member| member.id() == id);
                 channel.remove_members(&[*id]);
                 self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
@@ -642,10 +619,6 @@ impl RpcServer {
             session,
             channel,
         })
-    }
-
-    async fn enqueue_contact_sync(&self, sync: &ContactSync) -> Result<()> {
-        self.apply_contact_sync(sync).await
     }
 
     async fn apply_contact_sync(&self, sync: &ContactSync) -> Result<()> {

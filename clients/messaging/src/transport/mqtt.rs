@@ -48,7 +48,7 @@ pub(crate) type Client = AsyncClient;
 pub(crate) type ClientHandle = Arc<Mutex<Option<AsyncClient>>>;
 
 pub(super) const MAX_MESSAGE_SIZE: usize = 256 * 1024;
-pub(super) const MAX_INCOMING_PACKET_SIZE: usize = 2 * 1024 * 1024;
+pub(super) const MAX_INCOMING_PACKET_SIZE: usize = 16 * 1024 * 1024;
 
 
 // ---------------------------------------------------------------------------

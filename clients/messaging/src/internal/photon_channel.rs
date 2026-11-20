@@ -40,6 +40,7 @@ use crate::{
 use super::{
     PhotonContact,
     PhotonChannelMember,
+    ChannelInfo,
 };
 
 /// Channel implementation backed by a local contact and its membership list.
@@ -99,6 +100,30 @@ impl PhotonChannel {
             contact,
             members,
         }
+    }
+
+    pub(crate) fn from_channel_info(info: ChannelInfo, contact: PhotonContact, members: Vec<PhotonChannelMember>) -> Self {
+        Self {
+            owner: *info.owner_id(),
+            session_id: *info.session_id(),
+            permission: info.permission() as i32,
+            notice: info.notice().map(ToString::to_string),
+            announced: info.announce(),
+            contact,
+            members,
+        }
+    }
+}
+
+impl From<Box<PhotonChannel>> for Box<dyn ChannelHandler> {
+    fn from(channel: Box<PhotonChannel>) -> Self {
+        channel
+    }
+}
+
+impl AsRef<dyn ChannelHandler> for PhotonChannel {
+    fn as_ref(&self) -> &(dyn ChannelHandler + 'static) {
+        self
     }
 }
 

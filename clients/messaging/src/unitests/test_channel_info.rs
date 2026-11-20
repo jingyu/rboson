@@ -49,8 +49,8 @@ fn test_serde() {
     assert_eq!(origin.name(), None);
     assert_eq!(origin.notice(), None);
     assert_eq!(origin.announce(), false);
-    assert_eq!(origin.created_at(), boson_api::as_ms!(std::time::UNIX_EPOCH) as u64);
-    assert_eq!(origin.updated_at(), boson_api::as_ms!(std::time::UNIX_EPOCH) as u64);
+    assert_eq!(origin.created_at(), boson_api::as_ms!(std::time::UNIX_EPOCH) as i64);
+    assert_eq!(origin.updated_at(), boson_api::as_ms!(std::time::UNIX_EPOCH) as i64);
     assert!(origin.members().is_empty());
 
     for field in ["id", "o", "sid", "p"] {
