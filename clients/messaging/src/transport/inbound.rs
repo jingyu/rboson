@@ -326,7 +326,8 @@ impl RpcServer {
                         ));
                     }
 
-                    self.put_channel(Self::to_photon_channel(self.decode_channel_info(info.clone())?.0.as_ref())?).await?;
+                    let channel = PhotonChannel::try_from(info)?;
+                    self.put_channel(channel)?;
                     self.channel(from)
                         .map(|channel| Box::new(channel) as Channel)
                         .ok_or_else(|| {
@@ -361,7 +362,7 @@ impl RpcServer {
                 }
 
                 trace!("Channel {} created", channel_info.channel_id());
-                let (new_channel, _) = self.decode_channel_info(channel_info.clone())?;
+                let new_channel = PhotonChannel::try_from(channel_info)?;
 
                 let channel: Channel = match self.channel(channel_info.channel_id()) {
                     Some(v) => {
@@ -370,8 +371,8 @@ impl RpcServer {
                         Box::new(v)
                     }
                     None => {
-                        self.put_channel(Self::to_photon_channel(new_channel.as_ref())?).await?;
-                        new_channel
+                        self.put_channel(Self::to_photon_channel(new_channel.as_ref())?)?;
+                        Box::new(new_channel) as Channel
                     }
                 };
 
@@ -409,7 +410,7 @@ impl RpcServer {
             Body::ChannelJoin(info) => {
                 trace!("Channel {} joined", channel_id);
                 if self.channel(channel_id).is_none() {
-                    self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                    self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 }
 
                 if info.members().is_empty() {
@@ -464,7 +465,7 @@ impl RpcServer {
                     .unwrap()
                     .insert(*channel_id, self.session_context(*channel_id, session, true));
 
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener.on_channel_session_key_rotated(&channel);
                 return Ok(());
             }
@@ -477,7 +478,7 @@ impl RpcServer {
                 };
                 let old_owner = *channel.owner();
                 channel.set_owner(*new_owner);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener
                     .on_channel_ownership_transferred(&channel, &old_owner, new_owner);
                 return Ok(());
@@ -499,7 +500,7 @@ impl RpcServer {
                 if let Some(announced) = changes.get_announced() {
                     updated.set_announced(announced);
                 }
-                self.put_channel(Self::to_photon_channel(updated.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(updated.as_ref())?)?;
                 self.channel_listener.on_channel_updated(&updated);
             }
             Body::ChannelMembersRoleUpdate(update) => {
@@ -514,7 +515,7 @@ impl RpcServer {
                     return Ok(());
                 };
                 let changed = channel.update_member_roles(update.member_ids(), update.role());
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener
                     .on_channel_members_role_updated(&channel, &changed);
                 return Ok(());
@@ -525,7 +526,7 @@ impl RpcServer {
                     return Ok(());
                 };
                 let changed = channel.update_member_roles(ids, Role::Banned);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener
                     .on_channel_members_banned(&channel, &changed);
                 return Ok(());
@@ -536,7 +537,7 @@ impl RpcServer {
                     return Ok(());
                 };
                 let changed = channel.update_member_roles(ids, Role::Member);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener
                     .on_channel_members_unbanned(&channel, &changed);
                 return Ok(());
@@ -547,7 +548,7 @@ impl RpcServer {
                     return Ok(());
                 };
                 let removed = channel.remove_members(ids);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener
                     .on_channel_members_removed(&channel, &removed);
                 return Ok(());
@@ -563,7 +564,7 @@ impl RpcServer {
                     return Ok(());
                 };
                 channel.upsert_member(*member.id(), member.role(), member.joined());
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 self.channel_listener
                     .on_channel_member_joined(&channel, &(Box::new(member.clone()) as ChannelMember));
                 return Ok(());
@@ -576,7 +577,7 @@ impl RpcServer {
 
                 let member = channel.members().into_iter().find(|member| member.id() == id);
                 channel.remove_members(&[*id]);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
                 if let Some(member) = member {
                     self.channel_listener
                         .on_channel_member_left(&channel, &member);

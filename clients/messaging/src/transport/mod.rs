@@ -106,14 +106,6 @@ impl RpcServer {
         Ok(PhotonContact::try_from(data)?)
     }
 
-    fn persist_channel(&self, channel: &dyn crate::ChannelHandler) -> Result<()> {
-        let key = self.persisted_session_key(channel.id())?;
-        let boxed: Channel = Box::new(Self::to_photon_channel(channel)?);
-        self.repository
-            .borrow_mut()
-            .store_channel(self.contacts_revision.get(), &boxed, &key)
-    }
-
     fn session_context(
         &self,
         contact_id: Id,
@@ -311,6 +303,10 @@ impl RpcServer {
         Some(channel)
     }
 
+    pub(crate) fn get_channel(&self, id: &Id) -> Option<PhotonChannel> {
+        self.channel(id)
+    }
+
     pub(crate) async fn channels(&self) -> Vec<PhotonChannel> {
         let mut channels = self
             .repository
@@ -326,7 +322,8 @@ impl RpcServer {
         channels
     }
 
-    pub(crate) async fn put_channel(&self, channel: PhotonChannel) -> Result<()> {
+    pub(crate) fn put_channel(&self, channel: PhotonChannel) -> Result<()> {
+        let _ = self.persisted_session_key(channel.id())?;
         self.repository.borrow_mut().put_channel(channel)
     }
 

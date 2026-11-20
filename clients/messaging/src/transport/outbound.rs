@@ -184,8 +184,65 @@ impl RpcServer {
             userid,
             self.session_context(userid, session_identity, false),
         );
-        self.on_friend_request_accepted(userid, timestamp, false).await;
+        self.on_friend_request_accepted1(userid, timestamp, false).await;
         Ok(())
+    }
+
+    pub(super) async fn on_friend_request_accepted1(&self, user_id: Id, timestamp: i64, notify: bool) {
+        if timestamp < 0 {
+            warn!("Ignoring friend request acceptance from {user_id} with a negative timestamp");
+            return;
+        }
+
+        let Some(mut request) = self.friend_request(&user_id) else {
+            return;
+        };
+
+        if request.is_accepted() || request.is_expired() {
+            return;
+        }
+        let initiator_id = if notify {
+            self.user_identity.id()
+        } else {
+            &user_id
+        };
+
+        if request.initiator_id() != initiator_id || timestamp < request.created_at() {
+            warn!("Ignoring friend request acceptance from {user_id} that does not match the pending request");
+            return;
+        }
+
+        request.accept(timestamp);
+        if let Err(error) = self.put_friend_request(&request) {
+            warn!("Persisting accepted friend request failed: {error}");
+        }
+
+        if self
+            .contact(&user_id)
+            .await
+            .is_some_and(|contact| contact.contact_type() == ContactType::Friend)
+        {
+            if notify {
+                self.friend_request_listener
+                    .on_friend_request_accepted(&user_id);
+            }
+            return;
+        }
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or(0);
+        let mut contact = PhotonContact::new(user_id, ContactType::Friend, now_ms);
+        contact.set_revision(self.contacts_revision.get());
+        if let Err(error) = self.put_contact(&contact).await {
+            warn!("Persisting friend contact failed: {error}");
+        }
+        if notify {
+            self.friend_request_listener
+                .on_friend_request_accepted(&user_id);
+        }
+        let contact: Contact = Box::new(contact);
+        self.contact_listener.on_contact_added(&contact);
     }
 
     /// Registers an existing friend, given their session key, and syncs the
@@ -321,10 +378,10 @@ impl RpcServer {
         notice: Option<String>,
         announce: bool,
     ) -> Result<Channel> {
-        let session = CryptoIdentity::random();
-        let session_id = session.id();
+        let identity = CryptoIdentity::random();
+        let session_id = identity.id();
 
-        let session_key = session.signature_key().private_key().as_bytes();
+        let session_key = identity.signature_key().private_key().as_bytes();
         let encrypted_key = self
             .user_identity
             .encrypt_into(self.user_id(), session_key)?;
@@ -340,16 +397,13 @@ impl RpcServer {
         let request = RPCRequest::create_channel(0, new_channel_info);
 
         let result = self.send_rpccall(self.peer_id(), request).await?;
-        let ResponseParams::ChannelCreate(result) = result else {
+        let ResponseParams::ChannelCreate(channel_info) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
 
-       // let channel = Box::new(PhotonChannel::from(result, session_key));
-       // let identity = CryptoIdentity::try_from(session_key.as_slice())?;
-       // let _ = self.session_context(channel.session_id(), identity, true);
-
-        let (channel, returned_session) = self.decode_channel_info(result)?;
-        if channel.owner() != self.user_id() || channel.session_id() != session.id() {
+        let returned_session = self.session_context(*channel_info.channel_id(), identity, true);
+        let channel = Box::new(PhotonChannel::try_from(&channel_info)?) as Box<dyn ChannelHandler>;
+        if channel.owner() != self.user_id() {
             return Err(EncodingError::new(
                 "Created channel owner or session does not match",
             ));
@@ -418,10 +472,12 @@ impl RpcServer {
         let request = RPCRequest::join_channel(0, params);
 
         let result = self.send_rpccall(ticket.channel_id(), request).await?;
-        let ResponseParams::ChannelJoin(result) = result else {
+        let ResponseParams::ChannelJoin(channel_info) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
-        let (channel, returned_session) = self.decode_channel_info(result)?;
+        let returned_session = self.session_context(*channel_info.channel_id(), session.clone(), true);
+        let channel = Box::new(PhotonChannel::try_from(&channel_info)?) as Box<dyn ChannelHandler>;
+
         if channel.id() != ticket.channel_id()
             || channel.session_id() != session.id()
             || !channel.has_member(self.user_id())
@@ -467,11 +523,11 @@ impl RpcServer {
         let ResponseParams::ChannelInfo(info) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
-        let (channel, _) = self.decode_channel_info(info)?;
+        let channel = PhotonChannel::try_from(&info)?;
         if channel.id() != channel_id {
             return Err(EncodingError::new("Channel info has an unexpected ID"));
         }
-        self.put_channel(Self::to_photon_channel(channel.as_ref())?).await?;
+        self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
         let member = channel
             .member(self.user_id())
             .ok_or_else(|| StateError::new("Not a member of the channel"))?;
@@ -516,62 +572,6 @@ impl RpcServer {
             key,
         )
         .map_err(|e| e.into())
-    }
-
-    pub(super) fn decode_channel_info(&self, info: ChannelInfo) -> Result<(Channel, SessionContext)> {
-        if info.updated_at() < info.created_at() {
-            return Err(EncodingError::new("Invalid channel timestamps"));
-        }
-
-        for member in info.members() {
-            member.joined()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| EncodingError::new("Channel member timestamp is out of range"))?;
-        }
-
-        let session = match info.session_key() {
-            Some(key) => {
-                let key = self.user_identity.decrypt_into(self.user_id(), key)?;
-                let identity = CryptoIdentity::try_from(key.as_slice())?;
-                self.session_context(*info.channel_id(), identity, true)
-            }
-            None => self
-                .session_contexts
-                .lock()
-                .unwrap()
-                .get(info.channel_id())
-                .cloned()
-                .ok_or_else(|| StateError::new("Channel session key is missing"))?,
-        };
-        if session.session_id() != info.session_id() {
-            return Err(EncodingError::new(
-                "Channel session key does not match session ID",
-            ));
-        }
-
-        let channel: Channel = Box::new(PhotonChannel::new(
-            PhotonContact::try_from(&info)?,
-            *info.owner_id(),
-            *info.session_id(),
-            info.permission(),
-            info.notice().map(ToString::to_string),
-            info.announce(),
-            info.members().to_vec(),
-        ));
-        let mut ids = HashSet::new();
-        if channel
-            .members()
-            .iter()
-            .any(|member| !ids.insert(*member.id()))
-            || !channel
-                .member(&channel.owner())
-                .is_some_and(|member| member.is_owner())
-        {
-            return Err(EncodingError::new(
-                "Channel members or owner are inconsistent",
-            ));
-        }
-        Ok((channel, session))
     }
 
     async fn store_channel(&self, mut channel: Channel, session: SessionContext) -> Result<()> {
@@ -629,7 +629,7 @@ impl RpcServer {
         channel_id: &Id,
         new_owner: Id,
     ) -> Result<()> {
-        let Some(mut channel) = self.channel(channel_id).map(|v| Box::new(v) as Box<dyn ChannelHandler>) else {
+        let Some(mut channel) = self.channel(channel_id) else {
             return Err(StateError::new("Channel not found").into());
         };
         if channel.owner() != self.user_id() {
@@ -658,16 +658,12 @@ impl RpcServer {
         channel.set_owner(new_owner);
         channel.update_member_roles(&[new_owner], Role::Owner);
         channel.update_member_roles(&[old_owner], Role::Moderator);
-        self.persist_channel(channel.as_ref())?;
-
-        // 6. Notify the application.
-        self.channel_listener
-            .on_channel_ownership_transferred(&channel, &old_owner, &new_owner);
+        self.put_channel(channel)?;
         Ok(())
     }
 
     pub(crate) async fn rotate_channel_session_key(&self, channel_id: &Id) -> Result<()> {
-        let Some(mut channel) = self.channel(channel_id).map(|v| Box::new(v) as Box<dyn ChannelHandler>) else {
+        let Some(mut channel) = self.channel(channel_id) else {
             return Err(StateError::new("Channel not found").into());
         };
         if channel.owner() != self.user_id() {
@@ -702,10 +698,7 @@ impl RpcServer {
             *channel_id,
             self.session_context(*channel_id, session, true),
         );
-        self.persist_channel(channel.as_ref())?;
-
-        self.channel_listener
-            .on_channel_session_key_rotated(&channel);
+        self.put_channel(channel)?;
         Ok(())
     }
 
@@ -747,7 +740,7 @@ impl RpcServer {
         current.set_announced(channel.is_announced());
         current.set_updated_at(boson_api::as_ms!(SystemTime::now()) as i64);
         // let contact = Self::to_photon_contact_ops(current.contact_box().as_ref())?;
-        self.persist_channel(current.as_ref())?;
+        self.put_channel(current)?;
         //self.channel_listener.on_channel_updated(&current);
         Ok(())
     }
@@ -758,12 +751,12 @@ impl RpcServer {
         members: &[Id],
         role: Role,
     ) -> Result<()> {
-        let Some(mut channel) = self.channel(channel_id) else {
+        let Some(mut channel) = self.get_channel(channel_id) else {
             return Err(StateError::new("Channel not found").into());
         };
         if !channel
             .member(self.user_id())
-            .is_some_and(|member| member.is_owner() || member.is_moderator())
+            .is_some_and(|v| v.is_owner() || v.is_moderator())
         {
             return Err(StateError::new(
                 "Only a channel owner or moderator can manage members",
@@ -771,14 +764,14 @@ impl RpcServer {
         }
 
         let request = RPCRequest::update_channel_members_role(0, members.to_vec(), role);
-        let result = self.send_rpccall(channel_id, request).await?;
-        let ids = match result {
+        let response = self.send_rpccall(channel_id, request).await?;
+        let ids = match response {
             ResponseParams::ChannelMembersRoleUpdate(ids) => ids,
             _ => return Err(StateError::new("Unexpected response").into()),
         };
 
         let _ = channel.update_member_roles(&ids, role);
-        self.persist_channel(channel.as_ref())?;
+        self.put_channel(channel)?;
         Ok(())
     }
 
@@ -803,7 +796,7 @@ impl RpcServer {
         };
 
         let _ = channel.update_member_roles(&ids, Role::Banned);
-        self.persist_channel(channel.as_ref())?;
+        self.put_channel(channel)?;
         Ok(())
     }
 
@@ -833,7 +826,7 @@ impl RpcServer {
         };
 
         let _ = channel.update_member_roles(&ids, Role::Member);
-        self.persist_channel(channel.as_ref())?;
+        self.put_channel(channel)?;
 
         Ok(())
     }
@@ -864,7 +857,7 @@ impl RpcServer {
         };
 
         let _ = channel.remove_members(&ids);
-        self.persist_channel(channel.as_ref())?;
+        self.put_channel(channel)?;
         Ok(())
     }
 
@@ -964,7 +957,7 @@ impl RpcServer {
             channel.set_name(updated.name().map(ToString::to_string));
             channel.set_updated_at(updated.updated_at());
             channel.set_contact_revision(updated.revision());
-            self.put_channel(channel).await?;
+            self.put_channel(channel)?;
         }
         if updated.is_blocked() {
             self.blocked_contacts.lock().unwrap().insert(*updated.id());
@@ -972,7 +965,7 @@ impl RpcServer {
             self.blocked_contacts.lock().unwrap().remove(updated.id());
         }
         if let Some(channel) = self.channel(updated.id()) {
-            self.persist_channel(&channel)?;
+            self.put_channel(channel)?;
         } else {
             let session_key = self.persisted_session_key(updated.id()).ok();
             self.repository.borrow_mut().put_contact(

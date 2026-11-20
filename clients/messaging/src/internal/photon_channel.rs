@@ -24,6 +24,8 @@ use serde::{Serialize, Deserialize};
 use boson_api::{
     utils,
     Id,
+    Result,
+    Error,
 };
 use crate::{
     channel::{Permission, Role},
@@ -101,17 +103,21 @@ impl PhotonChannel {
             members,
         }
     }
+}
 
-    pub(crate) fn from_channel_info(info: ChannelInfo, contact: PhotonContact, members: Vec<PhotonChannelMember>) -> Self {
-        Self {
+impl TryFrom<&ChannelInfo> for PhotonChannel {
+    type Error = Error;
+
+    fn try_from(info: &ChannelInfo) -> Result<Self> {
+        Ok(Self {
             owner: *info.owner_id(),
             session_id: *info.session_id(),
             permission: info.permission() as i32,
             notice: info.notice().map(ToString::to_string),
             announced: info.announce(),
-            contact,
-            members,
-        }
+            contact: TryFrom::try_from(info)?,
+            members: info.members().to_vec(),
+        })
     }
 }
 

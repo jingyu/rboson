@@ -274,7 +274,7 @@ async fn channel_put_get_and_remove() {
     let channel = channel(user_id, owner, session_id);
     install_channel(&server, &channel);
 
-    server.put_channel(channel.clone()).await.unwrap();
+    server.put_channel(channel.clone()).unwrap();
 
     let loaded = server.channel(&user_id).unwrap();
     assert_eq!(*loaded.id(), user_id);
@@ -300,8 +300,8 @@ async fn channels_lists_cached_channels() {
     );
     install_channel(&server, &first);
     install_channel(&server, &second);
-    server.put_channel(first.clone()).await.unwrap();
-    server.put_channel(second.clone()).await.unwrap();
+    server.put_channel(first.clone()).unwrap();
+    server.put_channel(second.clone()).unwrap();
 
     let channels = server.channels().await;
     assert_eq!(channels.len(), 2);
@@ -324,8 +324,8 @@ async fn remove_channels_clears_cached_channels() {
     );
     install_channel(&server, &first);
     install_channel(&server, &second);
-    server.put_channel(first.clone()).await.unwrap();
-    server.put_channel(second.clone()).await.unwrap();
+    server.put_channel(first.clone()).unwrap();
+    server.put_channel(second.clone()).unwrap();
 
     server.remove_channels().await;
 

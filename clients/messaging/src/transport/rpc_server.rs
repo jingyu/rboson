@@ -1,12 +1,6 @@
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::AtomicI64;
 
 use super::prelude::*;
-
-use crate::{
-    FriendRequest,
-    Conversation,
-    ConversationHandler,
-};
 
 pub(crate) struct RpcServer {
     pub(super) options: Arc<Options>,
