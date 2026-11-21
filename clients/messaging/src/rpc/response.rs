@@ -21,7 +21,7 @@
 use std::result::Result as StdResult;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde_cbor::Value;
+use serde_cbor::Value as CborValue;
 
 use boson_api::{Id, Result};
 use crate::errors::EncodingError;
@@ -29,7 +29,7 @@ use crate::internal::{
     ChannelInfo,
     ContactSync,
 };
-use crate::session_info::SessionInfo;
+use crate::SessionInfo;
 use super::{
     error::RPCError,
     method::Method,
@@ -37,7 +37,7 @@ use super::{
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum Params {
+pub(crate) enum Value {
     SessionList(Vec<SessionInfo>),
     SessionRevoke(()),
     ContactMutate(i32),
@@ -56,7 +56,7 @@ pub(crate) enum Params {
     ChannelInfo(ChannelInfo),
 }
 
-impl Params {
+impl Value {
     fn empty(method: Method) -> Option<Self> {
         match method {
             Method::SessionRevoke => Some(Self::SessionRevoke(())),
@@ -69,41 +69,41 @@ impl Params {
         }
     }
 
-    fn decode<T: DeserializeOwned>(value: Value) -> Result<T> {
+    fn decode<T: DeserializeOwned>(value: CborValue) -> Result<T> {
         serde_cbor::value::from_value(value).map_err(|error|
             EncodingError::new(format!("Malformed response parameters: {error}")).into()
         )
     }
 
-    fn from_result(method: Method, value: Value) -> Result<Self> {
+    fn from_result(method: Method, value: CborValue) -> Result<Self> {
         let malformed = || EncodingError::new(format!("Malformed result for {method:?}"));
 
         match (method, value) {
-            (Method::SessionList, value @ Value::Array(_)) => {
+            (Method::SessionList, value @ CborValue::Array(_)) => {
                 Ok(Self::SessionList(Self::decode(value)?))
             }
-            (Method::SessionRevoke, Value::Null) => Ok(Self::SessionRevoke(())),
-            (Method::ContactMutate, Value::Integer(revision)) => {
+            (Method::SessionRevoke, CborValue::Null) => Ok(Self::SessionRevoke(())),
+            (Method::ContactMutate, CborValue::Integer(revision)) => {
                 let revision = i32::try_from(revision)
                     .ok()
                     .filter(|revision| *revision >= 0)
                     .ok_or_else(malformed)?;
                 Ok(Self::ContactMutate(revision))
             }
-            (Method::ContactSync, value @ Value::Map(_)) => {
+            (Method::ContactSync, value @ CborValue::Map(_)) => {
                 Ok(Self::ContactSync(Self::decode(value)?))
             }
-            (Method::ChannelCreate, value @ Value::Map(_)) => {
+            (Method::ChannelCreate, value @ CborValue::Map(_)) => {
                 Ok(Self::ChannelCreate(Self::decode(value)?))
             }
-            (Method::ChannelDelete, Value::Null) => Ok(Self::ChannelDelete(())),
-            (Method::ChannelOwnershipTransfer, Value::Null) => {
+            (Method::ChannelDelete, CborValue::Null) => Ok(Self::ChannelDelete(())),
+            (Method::ChannelOwnershipTransfer, CborValue::Null) => {
                 Ok(Self::ChannelOwnershipTransfer(()))
             }
-            (Method::ChannelSessionKeyRotate, Value::Null) => {
+            (Method::ChannelSessionKeyRotate, CborValue::Null) => {
                 Ok(Self::ChannelSessionKeyRotate(()))
             }
-            (Method::ChannelInfoUpdate, Value::Null) => Ok(Self::ChannelInfoUpdate(())),
+            (Method::ChannelInfoUpdate, CborValue::Null) => Ok(Self::ChannelInfoUpdate(())),
             (Method::ChannelMembersRoleUpdate, value) => {
                 Ok(Self::ChannelMembersRoleUpdate(Self::decode(value)?))
             }
@@ -116,11 +116,11 @@ impl Params {
             (Method::ChannelMembersRemove, value) => {
                 Ok(Self::ChannelMembersRemove(Self::decode(value)?))
             }
-            (Method::ChannelJoin, value @ Value::Map(_)) => {
+            (Method::ChannelJoin, value @ CborValue::Map(_)) => {
                 Ok(Self::ChannelJoin(Self::decode(value)?))
             }
-            (Method::ChannelLeave, Value::Null) => Ok(Self::ChannelLeave(())),
-            (Method::ChannelInfo, value @ Value::Map(_)) => {
+            (Method::ChannelLeave, CborValue::Null) => Ok(Self::ChannelLeave(())),
+            (Method::ChannelInfo, value @ CborValue::Map(_)) => {
                 Ok(Self::ChannelInfo(Self::decode(value)?))
             }
             _ => Err(malformed().into()),
@@ -133,7 +133,7 @@ impl Params {
 pub(crate) struct RpcResponse {
     id: i64,
     method: Method,
-    result: Option<Params>,
+    result: Option<Value>,
     error: Option<RPCError>,
 }
 
@@ -146,15 +146,23 @@ impl RpcResponse {
         self.method
     }
 
-    pub(crate) fn result(self) -> Result<Params> {
+    pub(crate) fn result(self) -> Result<Value> {
         if let Some(error) = self.error {
             return Err(error.into());
         }
         match self.result {
-            Some(params) => Ok(params),
-            None => Params::empty(self.method)
+            Some(result) => Ok(result),
+            None => Value::empty(self.method)
                 .ok_or_else(|| EncodingError::new(format!("Missing result for {:?}", self.method)).into()),
         }
+    }
+
+    pub(crate) fn deserialize(payload: &[u8]) -> Result<Self> {
+        serde_cbor::from_slice(payload).map_err(|e|
+            EncodingError::new(&format!(
+                "deserializing rpc response error: {e}")
+            ).into()
+        )
     }
 }
 
@@ -165,7 +173,7 @@ struct RawResponse {
     #[serde(rename = "m")]
     method: Method,
     #[serde(rename = "r", default)]
-    result: Option<Value>,
+    result: Option<CborValue>,
     #[serde(rename = "e", default)]
     error: Option<RPCError>,
 }
@@ -178,7 +186,7 @@ impl TryFrom<RawResponse> for RpcResponse {
             return Err(EncodingError::new("Invalid RPC response id").into());
         }
         let result = match raw.result {
-            Some(value) => Some(Params::from_result(raw.method, value)?),
+            Some(v) => Some(Value::from_result(raw.method, v)?),
             None => None,
         };
         Ok(Self {

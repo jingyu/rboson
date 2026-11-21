@@ -124,13 +124,13 @@ pub trait MessagingClient {
     ) -> impl Future<Output = Result<()>>;
 
     /// Removes multiple messages by their internal identifiers.
-    fn remove_messages_by_ids(
+    fn remove_messages(
         &self,
         message_ids: &[i64]
     ) -> impl Future<Output = Result<()>>;
 
     /// Deletes all messages within a conversation.
-    fn remove_messages_in_conversation(
+    fn remove_messages_by_conversation(
         &self,
         conversation_id: &Id
     ) -> impl Future<Output = Result<()>>;

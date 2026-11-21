@@ -8,7 +8,7 @@ use boson::messaging::{
     Options, OptionsBuilder,
     ChannelListener,
     ContactType,
-    ContactHandler,
+    //ContactHandler,
     InviteTicket,
     Message,
     MessageListener,
@@ -16,7 +16,7 @@ use boson::messaging::{
     MessagingClient,
     Permission,
     Role,
-    FriendRequest,
+   // FriendRequest,
 };
 
 const BOB_YAML: &str = "tests/apitests/messaging/bob.yaml";
@@ -505,8 +505,8 @@ mod lifecycle {
         assert!(client.get_messages(&user_id, None, 10, 0).await.is_err());
         assert!(client.get_messages_in_range(&user_id, 0, 1).await.is_err());
         assert!(client.remove_message(1).await.is_err());
-        assert!(client.remove_messages_by_ids(&[1, 2]).await.is_err());
-        assert!(client.remove_messages_in_conversation(&user_id).await.is_err());
+        assert!(client.remove_messages(&[1, 2]).await.is_err());
+        assert!(client.remove_messages_by_conversation(&user_id).await.is_err());
 
         assert!(client.sessions().await.is_err());
         assert!(client.revoke_session(&user_id).await.is_err());
@@ -1080,7 +1080,7 @@ mod messages {
         assert_eq!(error, "remove_message");
 
         let error = client
-            .remove_messages_by_ids(&[1, 2])
+            .remove_messages(&[1, 2])
             .await
             .err()
             .unwrap()
@@ -1088,7 +1088,7 @@ mod messages {
         assert_eq!(error, "remove_messages_by_ids");
 
         let error = client
-            .remove_messages_in_conversation(&conversation_id)
+            .remove_messages_by_conversation(&conversation_id)
             .await
             .err()
             .unwrap()
@@ -1514,7 +1514,7 @@ mod channels {
     #[tokio::test]
     #[serial]
     async fn test_channel_session_key_rotation() {
-        let (rotated, mut rotated_rx) = mpsc::unbounded_channel();
+        let (rotated, _rotated_rx) = mpsc::unbounded_channel();
         let bob = create_client_with_channel_listener(
             BOB_YAML,
             ChannelRotationCapture { rotated },

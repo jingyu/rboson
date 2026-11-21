@@ -1,6 +1,8 @@
 use super::prelude::*;
 use super::mqtt;
 
+use crate::rpc::response;
+
 pub(super) const FIELD_SESSION_KEY: &str = "sk";
 pub(super) const FIELD_OWNER: &str = "o";
 pub(super) const FIELD_PERMISSION: &str = "p";
@@ -8,6 +10,33 @@ pub(super) const FIELD_NOTICE: &str = "nt";
 pub(super) const FIELD_ANNOUNCED: &str = "a";
 
 impl RpcServer {
+    pub(crate) async fn get_conversation(
+        &self,
+        id: &Id,
+    ) -> Result<Option<PhotonConversation>> {
+        Ok(self.conversation(id).await)
+    }
+
+    pub(crate) async fn get_conversation_list(
+        &self,
+    ) -> Result<Vec<PhotonConversation>> {
+        Ok(self.conversations().await)
+    }
+
+    pub(crate) async fn remove_conversation(&self, id: &Id) -> Result<()> {
+        self.repository
+            .borrow_mut()
+            .remove_messages_in_conversation(id)
+            .map(|_| ())
+    }
+
+    pub(crate) async fn remove_conversation_list(&self, ids: &[Id]) -> Result<()> {
+        for id in ids {
+            self.remove_conversation(id).await?;
+        }
+        Ok(())
+    }
+
     /// Reads a page of history. Not implemented yet.
     pub(crate) async fn get_messages(
         &self,
@@ -51,7 +80,7 @@ impl RpcServer {
     }
 
     /// Clears a conversation's history. Not implemented yet.
-    pub(crate) async fn remove_messages_in_conversation(
+    pub(crate) async fn remove_messages_by_conversation(
         &self,
         conversation_id: &Id,
     ) -> Result<()> {
@@ -65,7 +94,7 @@ impl RpcServer {
         let request = RPCRequest::list_sessions(0);
 
         let result = self.send_rpccall(self.peer_id(), request).await?;
-        let ResponseParams::SessionList(sessions) = result else {
+        let response::Value::SessionList(sessions) = result else {
             return Err(EncodingError::new("RPC result is not a session list").into());
         };
 
@@ -249,13 +278,13 @@ impl RpcServer {
     /// new contact to the user's other devices.
     pub(crate) async fn add_friend(
         &self,
-        user_id: &Id,
+        user_id: Id,
         session_key: Vec<u8>,
         remark: Option<String>,
     ) -> Result<()> {
 
         assert!(
-            user_id != self.user_id(),
+            &user_id != self.user_id(),
             "Cannot add yourself as a friend",
         );
 
@@ -269,7 +298,7 @@ impl RpcServer {
         // 2. Build the request.
         let now_ms = SystemTime::now();
         let mut data = ContactData::new(
-            *user_id,
+            user_id,
             ContactType::Friend as u8,
             boson_api::as_ms!(now_ms) as i64,
         );
@@ -286,7 +315,7 @@ impl RpcServer {
         // 3. Send it to the home peer and 4. decode the revision it reports.
         let result = self.send_rpccall(self.peer_id(), request).await?;
         let confirmed = match result {
-            ResponseParams::ContactMutate(confirmed) => confirmed,
+            response::Value::ContactMutate(confirmed) => confirmed,
             _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
         };
         if confirmed < next_revision || confirmed < self.contacts_revision.get() {
@@ -297,8 +326,8 @@ impl RpcServer {
         // 5. Apply the confirmed change to the local state.
         let contact = data.contact(confirmed)?;
         self.session_contexts.lock().unwrap().insert(
-            *user_id,
-            self.session_context(*user_id, session_identity, false),
+            user_id,
+            self.session_context(user_id, session_identity, false),
         );
         self.put_contact(&contact).await?;
 
@@ -355,7 +384,7 @@ impl RpcServer {
 
         let result = self.send_rpccall(self.peer_id(), request).await?;
         let confirmed = match result {
-            ResponseParams::ContactMutate(confirmed) => confirmed,
+            response::Value::ContactMutate(confirmed) => confirmed,
             _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
         };
         if confirmed < revision || confirmed < self.contacts_revision.get() {
@@ -371,33 +400,18 @@ impl RpcServer {
         Ok(Box::new(blocked) as Contact)
     }
 
-    pub(crate) async fn create_channel(
-        &self,
-        permission: Permission,
-        name: String,
-        notice: Option<String>,
-        announce: bool,
-    ) -> Result<Channel> {
-        let identity = CryptoIdentity::random();
-        let session_id = identity.id();
+    pub(crate) async fn create_channel(&self, mut new_ci: NewChannelInfo) -> Result<Channel> {
+        let identity = CryptoIdentity::try_from(new_ci.session_key())?;
 
-        let session_key = identity.signature_key().private_key().as_bytes();
         let encrypted_key = self
             .user_identity
-            .encrypt_into(self.user_id(), session_key)?;
+            .encrypt_into(self.user_id(), new_ci.session_key())?;
+        new_ci.set_session_key(encrypted_key);
 
-        let new_channel_info = NewChannelInfo::new(
-            *session_id,
-            encrypted_key,
-            permission,
-            Some(name.clone()),
-            notice.clone(),
-            announce,
-        );
-        let request = RPCRequest::create_channel(0, new_channel_info);
+        let request = RPCRequest::create_channel(0, new_ci);
 
         let result = self.send_rpccall(self.peer_id(), request).await?;
-        let ResponseParams::ChannelCreate(channel_info) = result else {
+        let response::Value::ChannelCreate(channel_info) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
 
@@ -472,7 +486,7 @@ impl RpcServer {
         let request = RPCRequest::join_channel(0, params);
 
         let result = self.send_rpccall(ticket.channel_id(), request).await?;
-        let ResponseParams::ChannelJoin(channel_info) = result else {
+        let response::Value::ChannelJoin(channel_info) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
         let returned_session = self.session_context(*channel_info.channel_id(), session.clone(), true);
@@ -520,7 +534,7 @@ impl RpcServer {
     ) -> Result<InviteTicket> {
         let request = RPCRequest::get_channel_info(0);
         let result = self.send_rpccall(channel_id, request).await?;
-        let ResponseParams::ChannelInfo(info) = result else {
+        let response::Value::ChannelInfo(info) = result else {
             return Err(EncodingError::new("RPC result is not channel info").into());
         };
         let channel = PhotonChannel::try_from(&info)?;
@@ -766,7 +780,7 @@ impl RpcServer {
         let request = RPCRequest::update_channel_members_role(0, members.to_vec(), role);
         let response = self.send_rpccall(channel_id, request).await?;
         let ids = match response {
-            ResponseParams::ChannelMembersRoleUpdate(ids) => ids,
+            response::Value::ChannelMembersRoleUpdate(ids) => ids,
             _ => return Err(StateError::new("Unexpected response").into()),
         };
 
@@ -791,7 +805,7 @@ impl RpcServer {
         let request = RPCRequest::ban_channel_members(0, members.to_vec());
         let result = self.send_rpccall(channel_id, request).await?;
         let ids = match result {
-            ResponseParams::ChannelMembersBan(ids) => ids,
+            response::Value::ChannelMembersBan(ids) => ids,
             _ => return Err(StateError::new("Unexpected response").into()),
         };
 
@@ -821,7 +835,7 @@ impl RpcServer {
         let result = self.send_rpccall(channel_id, request).await?;
 
         let ids = match result {
-            ResponseParams::ChannelMembersUnban(ids) => ids,
+            response::Value::ChannelMembersUnban(ids) => ids,
             _ => return Err(StateError::new("Unexpected response").into()),
         };
 
@@ -852,7 +866,7 @@ impl RpcServer {
 
         let result = self.send_rpccall(channel_id, request).await?;
         let ids = match result {
-            ResponseParams::ChannelMembersRemove(ids) => ids,
+            response::Value::ChannelMembersRemove(ids) => ids,
             _ => return Err(StateError::new("Unexpected response").into()),
         };
 
@@ -943,7 +957,7 @@ impl RpcServer {
         // 3. Send it to the home peer and 4. decode the revision it reports.
         let result = self.send_rpccall(self.peer_id(), request).await?;
         let confirmed = match result {
-            ResponseParams::ContactMutate(confirmed) => confirmed,
+            response::Value::ContactMutate(confirmed) => confirmed,
             _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
         };
         if confirmed < next_revision || confirmed < self.contacts_revision.get() {
@@ -988,7 +1002,7 @@ impl RpcServer {
 
         let result = self.send_rpccall(self.peer_id(), request).await?;
         let confirmed = match result {
-            ResponseParams::ContactMutate(confirmed) => confirmed,
+            response::Value::ContactMutate(confirmed) => confirmed,
             _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
         };
         if confirmed < revision || confirmed < self.contacts_revision.get() {
@@ -1335,7 +1349,7 @@ impl RpcServer {
         &self,
         recipient: &Id,
         request: RPCRequest,
-    ) -> Result<ResponseParams> {
+    ) -> Result<response::Value> {
         let timestamp = self.origin_timestamp();
         let method = request.method();
         let request = request.with_id(timestamp);

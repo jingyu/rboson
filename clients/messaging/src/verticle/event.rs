@@ -22,53 +22,61 @@ use std::collections::HashMap;
 
 use boson_api::Id;
 use crate::{
-    Conversation,
-    channel::{Channel, Permission, Role},
+    channel::Channel,
     contact::Contact,
-    internal::photon_conversation::PhotonConversation,
-    internal::photon_friend_request::PhotonFriendRequest,
     invite_ticket::InviteTicket,
     message::Message,
     session_info::SessionInfo,
 };
+use crate::internal::{
+    ChannelMembersRole,
+    PhotonConversation,
+    PhotonFriendRequest,
+    NewChannelInfo,
+};
 use super::promise::Promise;
 
-pub(crate) struct Body<Input, Output> {
-    pub(crate) params: Input,
-    pub(crate) result: Promise<Output>,
-}
-
-impl<Input, Output> Body<Input, Output> {
-    pub(crate) fn new(params: Input, result: Promise<Output>) -> Self {
-        Self { params, result }
-    }
-}
+pub(crate) struct Body<I,O>(pub(crate) I, pub(crate) Promise<O>);
 
 pub(crate) enum Event {
     Start(Body<(), ()>),
     Stop(Body<(), ()>),
-    GetConversations(Body<Option<Id>, Vec<PhotonConversation>>),
-    RemoveConversations(Body<Vec<Id>, ()>),
+
+    GetConversation(Body<Id, Option<PhotonConversation>>),
+    GetConversationList(Body<(), Vec<PhotonConversation>>),
+    RemoveConversation(Body<Id, ()>),
+    RemoveConversationList(Body<Vec<Id>, ()>),
+
     GetMessages(Body<MsgPaginationParams, Vec<Message>>),
-    RemoveMessages(Body<MsgIdsParams, ()>),
+    RemoveMessageList(Body<Vec<i64>, ()>),
+    RemoveMessagesByConversation(Body<Id, ()>),
+
     GetSessions(Body<(), Vec<SessionInfo>>),
     RevokeSession(Body<Id, ()>),
-    FriendRequest(Body<FriendRequestParams, ()>),
+
+    FriendRequest(Body<(Id, Option<String>), ()>),
     FriendAccept(Body<Id, ()>),
     GetFriendRequests(Body<Option<Id>, Vec<PhotonFriendRequest>>),
     RemoveFriendRequests(Body<Vec<Id>, ()>),
+
     ContentMessage(Body<MsgContentParams, Message>),
-    RegisterFriendSession(Body<AddFriendParams, ()>),
+    RegisterFriendSession(Body<(Id, Vec<u8>, Option<String>), ()>),
     BlockUser(Body<Id, Contact>),
-    CreateChannel(Body<NewChannelParams, Channel>),
+
+    CreateChannel(Body<NewChannelInfo, Channel>),
     RemoveChannel(Body<Id, ()>),
     JoinChannel(Body<InviteTicket, Channel>),
     LeaveChannel(Body<Id, ()>),
+
     CreateInviteTicket(Body<(Id, Option<Id>), InviteTicket>),
     TransferChannelOwnership(Body<(Id, Id), ()>),
     RotateChannelSessionKey(Body<Id, ()>),
+
     UpdateChannelInfo(Body<Channel, ()>),
-    OperateChannelMembers(Body<OperateChannelMembersParams, ()>),
+    SetChannelMembersRole(Body<(Id, ChannelMembersRole), ()>),
+    BanChannelMembers(Body<(Id, Vec<Id>), ()>),
+    UnbanChannelMembers(Body<(Id, Vec<Id>), ()>),
+    RemoveChannelMembers(Body<(Id, Vec<Id>), ()>),
 
     GetContacts(Body<Option<Id>, Vec<Contact>>),
     UpdateContact(Body<Contact, ()>),
@@ -86,46 +94,10 @@ pub(crate) struct MsgPaginationParams {
     pub(crate) end : Option<i64>,
 }
 
-// Identifiers for messages to be removed
-pub(crate) struct MsgIdsParams {
-    pub(crate) conversation_id: Option<Id>,
-    pub(crate) messages: Option<Vec<i64>>,
-}
-
 // Parameters for sending a content message
 pub(crate) struct MsgContentParams {
     pub(crate) conversation_id: Id,
     pub(crate) metadata: HashMap<String, serde_json::Value>,
     pub(crate) content: Vec<u8>,
     pub(crate) is_encrypted: bool,
-}
-
-pub(crate) struct FriendRequestParams {
-    pub(crate) user_id: Id,
-    pub(crate) hello: Option<String>,
-}
-
-pub(crate) struct AddFriendParams {
-    pub(crate) user_id: Id,
-    pub(crate) session_key: Vec<u8>,
-    pub(crate) remark: Option<String>,
-}
-
-pub(crate) struct NewChannelParams {
-    pub(crate) permission: Permission,
-    pub(crate) name: String,
-    pub(crate) notice: Option<String>,
-    pub(crate) announcement: bool,
-}
-
-pub(crate) const OPERATE_SET_MEMBER_ROLE: u8 = 0;
-pub(crate) const OPERATE_BAN_MEMBERS: u8 = 1;
-pub(crate) const OPERATE_UNBAN_MEMBERS: u8 = 2;
-pub(crate) const OPERATE_REMOVE_MEMBERS: u8 = 3;
-
-pub(crate) struct OperateChannelMembersParams {
-    pub(crate) operation: u8,
-    pub(crate) channel_id: Id,
-    pub(crate) member_ids: Vec<Id>,
-    pub(crate) role: Option<Role>,
 }

@@ -26,14 +26,10 @@ use std::{
 };
 
 use boson_api::{
-    errors::{
+    Id, Result, errors::{
         ArgumentError,
         StateError,
-    },
-    logger,
-    signature,
-    Id,
-    Result,
+    }, id, logger, signature
 };
 
 use crate::{
@@ -398,7 +394,7 @@ impl Client {
 impl Client {
     pub async fn conversation(&self, id: &Id) -> Result<Option<Conversation>> {
         Ok(self.verticle_client()?
-            .get_conversations(Some(*id))
+            .get_conversation(*id)
             .await?
             .into_iter()
             .next()
@@ -408,18 +404,20 @@ impl Client {
 
     pub async fn conversations(&self) -> Result<Vec<Conversation>> {
         Ok(self.verticle_client()?
-            .get_conversations(None)
+            .get_conversation_list()
             .await?
             .into_iter().map(Into::into).collect())
     }
 
     pub async fn remove_conversation(&self, id: &Id) -> Result<()> {
-        self.remove_conversations(&[*id]).await
+        self.verticle_client()?
+            .remove_conversation(*id)
+            .await
     }
 
     pub async fn remove_conversations(&self, ids: &[Id]) -> Result<()> {
         self.verticle_client()?
-            .remove_conversations(ids.to_vec())
+            .remove_conversation_list(ids.to_vec())
             .await
     }
 }
@@ -454,22 +452,17 @@ impl Client {
             .await
     }
 
-    /// Removes a single message by id.
-    pub async fn remove_message(&self, message_id: i64) -> Result<()> {
-        self.verticle_client()?.remove_message(message_id).await
-    }
-
     /// Removes several messages by id in one round trip.
-    pub async fn remove_messages_by_ids(&self, message_ids: &[i64]) -> Result<()> {
+    pub async fn remove_messages(&self, message_ids: &[i64]) -> Result<()> {
         self.verticle_client()?
-            .remove_messages_by_ids(message_ids.to_vec())
+            .remove_messages(message_ids.to_vec())
             .await
     }
 
     /// Clears the whole history of a conversation.
-    pub async fn remove_messages_in_conversation(&self, conversation_id: &Id) -> Result<()> {
+    pub async fn remove_messages_by_conversation(&self, conversation_id: &Id) -> Result<()> {
         self.verticle_client()?
-            .remove_messages_in_conversation(*conversation_id)
+            .remove_messages_by_conversation(*conversation_id)
             .await
     }
 
@@ -686,7 +679,7 @@ impl Client {
             ));
         }
 
-        self.verticle_client()?.join_channel(ticket).await
+        self.verticle_client()?.join_channel(ticket).await.map_err(|e| e.into())
     }
 
     /// Leaves a channel.
@@ -904,15 +897,15 @@ impl MessagingClient for Client {
     }
 
     async fn remove_message(&self, message_id: i64) -> Result<()> {
-        self.remove_message(message_id).await
+        self.remove_messages(&[message_id]).await
     }
 
-    async fn remove_messages_by_ids(&self, message_ids: &[i64]) -> Result<()> {
-        self.remove_messages_by_ids(message_ids).await
+    async fn remove_messages(&self, message_ids: &[i64]) -> Result<()> {
+        self.remove_messages(message_ids).await
     }
 
-    async fn remove_messages_in_conversation(&self, conversation_id: &Id) -> Result<()> {
-        self.remove_messages_in_conversation(conversation_id).await
+    async fn remove_messages_by_conversation(&self, conversation_id: &Id) -> Result<()> {
+        self.remove_messages_by_conversation(conversation_id).await
     }
 
     async fn sessions(&self) -> Result<Vec<SessionInfo>> {

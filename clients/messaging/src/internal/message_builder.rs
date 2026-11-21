@@ -131,7 +131,7 @@ impl MessageBuilderOps for ClientMessageBuilder {
             let (promise, future) = verticle::Promise::pair();
             sender
                 .send(verticle::Event::ContentMessage(
-                    verticle::Body::new(
+                    verticle::Body(
                         verticle::MsgContentParams {
                             conversation_id: recipient,
                             metadata: headers,

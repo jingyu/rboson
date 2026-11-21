@@ -19,7 +19,7 @@
 // SOFTWARE.
 
 use serde::Serialize;
-use serde_cbor::Value;
+use serde_cbor::Value as CborValue;
 
 use boson_api::{
     Id,
@@ -39,7 +39,7 @@ use super::method::Method;
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
-pub(crate) enum Params {
+pub(crate) enum Value {
     SessionList(()),
     SessionRevoke(Id),
     ContactMutate(ContactMutation),
@@ -67,14 +67,14 @@ pub(crate) struct RPCRequest {
     method: Method,
 
     #[serde(rename = "p")]
-    params: Params,
+    params: Value,
 
     #[serde(rename = "c", skip_serializing_if = "Option::is_none")]
-    cookie: Option<Value>,
+    cookie: Option<CborValue>,
 }
 
 impl RPCRequest {
-    fn new(id: i64, method: Method, params: Params) -> Self {
+    fn new(id: i64, method: Method, params: Value) -> Self {
         Self {
             id,
             method,
@@ -89,7 +89,7 @@ impl RPCRequest {
     }
 
     pub(crate) fn _with_cookie(mut self, cookie: Vec<u8>) -> Self {
-        self.cookie = Some(Value::Bytes(cookie));
+        self.cookie = Some(CborValue::Bytes(cookie));
         self
     }
 
@@ -103,78 +103,78 @@ impl RPCRequest {
     }
 
     pub(crate) fn list_sessions(id: i64) -> Self {
-        Self::new(id, Method::SessionList, Params::SessionList(()))
+        Self::new(id, Method::SessionList, Value::SessionList(()))
     }
 
     pub(crate) fn revoke_session(id: i64, device_id: Id) -> Self {
-        let params = Params::SessionRevoke(device_id);
+        let params = Value::SessionRevoke(device_id);
         Self::new(id, Method::SessionRevoke, params)
     }
 
     pub(crate) fn contact_mutate(id: i64, mutation: ContactMutation) -> Self {
-        let params = Params::ContactMutate(mutation);
+        let params = Value::ContactMutate(mutation);
         Self::new(id, Method::ContactMutate, params)
     }
 
     pub(crate) fn contact_sync(id: i64, revision: i32) -> Self {
-        let params = Params::ContactSync(revision);
+        let params = Value::ContactSync(revision);
         Self::new(id, Method::ContactSync, params)
     }
 
     pub(crate) fn create_channel(id: i64, info: NewChannelInfo) -> Self {
-        let params = Params::ChannelCreate(info);
+        let params = Value::ChannelCreate(info);
         Self::new(id, Method::ChannelCreate, params)
     }
 
     pub(crate) fn join_channel(id: i64, params: JoinChannel) -> Self {
-        let params = Params::ChannelJoin(params);
+        let params = Value::ChannelJoin(params);
         Self::new(id, Method::ChannelJoin, params)
     }
 
     pub(crate) fn delete_channel(id: i64) -> Self {
-        Self::new(id, Method::ChannelDelete, Params::ChannelDelete(()))
+        Self::new(id, Method::ChannelDelete, Value::ChannelDelete(()))
     }
 
     pub(crate) fn leave_channel(id: i64) -> Self {
-        Self::new(id, Method::ChannelLeave, Params::ChannelLeave(()))
+        Self::new(id, Method::ChannelLeave, Value::ChannelLeave(()))
     }
 
     pub(crate) fn get_channel_info(id: i64) -> Self {
-        Self::new(id, Method::ChannelInfo, Params::ChannelInfo(()))
+        Self::new(id, Method::ChannelInfo, Value::ChannelInfo(()))
     }
 
     pub(crate) fn transfer_channel_ownership(id: i64, new_owner: Id) -> Self {
-        let params = Params::ChannelOwnershipTransfer(new_owner);
+        let params = Value::ChannelOwnershipTransfer(new_owner);
         Self::new(id, Method::ChannelOwnershipTransfer, params)
     }
 
     pub(crate) fn rotate_channel_session_key(id: i64, rotation: ChannelSessionKeyRotation) -> Self {
-        let params = Params::ChannelSessionKeyRotate(rotation);
+        let params = Value::ChannelSessionKeyRotate(rotation);
         Self::new(id, Method::ChannelSessionKeyRotate, params)
     }
 
     pub(crate) fn update_channel_info(id: i64, changes: ChannelInfoUpdate) -> Self {
-        let params = Params::ChannelInfoUpdate(changes);
+        let params = Value::ChannelInfoUpdate(changes);
         Self::new(id, Method::ChannelInfoUpdate, params)
     }
 
     pub(crate) fn update_channel_members_role(id: i64, members: Vec<Id>, role: Role) -> Self {
-        let params = Params::ChannelMembersRoleUpdate(ChannelMembersRole::new(members, role));
+        let params = Value::ChannelMembersRoleUpdate(ChannelMembersRole::new(members, role));
         Self::new(id, Method::ChannelMembersRoleUpdate, params)
     }
 
     pub(crate) fn ban_channel_members(id: i64, members: Vec<Id>) -> Self {
-        let params = Params::ChannelMembersBan(members);
+        let params = Value::ChannelMembersBan(members);
         Self::new(id, Method::ChannelMembersBan, params)
     }
 
     pub(crate) fn unban_channel_members(id: i64, members: Vec<Id>) -> Self {
-        let params = Params::ChannelMembersUnban(members);
+        let params = Value::ChannelMembersUnban(members);
         Self::new(id, Method::ChannelMembersUnban, params)
     }
 
     pub(crate) fn remove_channel_members(id: i64, members: Vec<Id>) -> Self {
-        let params = Params::ChannelMembersRemove(members);
+        let params = Value::ChannelMembersRemove(members);
         Self::new(id, Method::ChannelMembersRemove, params)
     }
 }

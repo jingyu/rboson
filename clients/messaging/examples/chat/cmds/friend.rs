@@ -26,10 +26,8 @@ use clap::{
     Command,
 };
 use boson::messaging::{
-    ContactHandler,
     Client,
     ContactType,
-    FriendRequest,
 };
 
 use super::parse_id;

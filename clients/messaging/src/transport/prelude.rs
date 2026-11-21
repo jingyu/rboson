@@ -7,7 +7,7 @@ pub(crate) use std::{
     rc::Rc,
     sync::Arc,
     sync::Mutex,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 pub(crate) use log::{debug, error, info, warn};
 pub(crate) use serde_cbor::Value;
@@ -52,7 +52,6 @@ pub(crate) use crate::interfaces::{
 };
 
 pub(crate) use crate::internal::{
-    ChannelInfo,
     ChannelSessionKeyRotation,
     ContactData,
     ContactMutation,
@@ -81,9 +80,6 @@ pub(crate) use crate::rpc::{
     call::Calls,
     error::RPCError,
     request::RPCRequest,
-    response::{
-        Params as ResponseParams
-    },
 };
 
 pub(crate) use super::mqtt::ClientHandle;

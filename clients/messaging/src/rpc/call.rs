@@ -36,13 +36,13 @@ use boson_api::{
 };
 use super::{
     method::Method,
-    response::{Params, RpcResponse},
+    response::{Value, RpcResponse},
 };
 
 struct PendingCall {
     method: Method,
     recipient: Id,
-    promise: Promise<Params>,
+    promise: Promise<Value>,
 }
 
 #[derive(Default)]
@@ -53,11 +53,11 @@ pub(crate) struct Calls {
 pub(crate) struct CallFuture<'a> {
     calls: &'a Calls,
     id: i64,
-    future: PromiseFuture<Params>,
+    future: PromiseFuture<Value>,
 }
 
 impl Future for CallFuture<'_> {
-    type Output = Result<Params>;
+    type Output = Result<Value>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.get_mut().future).poll(context)

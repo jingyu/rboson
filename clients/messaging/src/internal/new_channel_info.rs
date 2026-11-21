@@ -30,31 +30,15 @@ use crate::internal::serde_utils::permission;
 pub(crate) struct NewChannelInfo {
     #[serde(rename = "sid", with = "utils::id")]
     session_id: Id,
-
     #[serde(rename = "sk", with = "utils::bytes")]
     session_key: Vec<u8>,
-
     #[serde(rename = "p", with = "permission")]
     permission: i32,
-
-    #[serde(
-        rename = "n",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "n",  skip_serializing_if = "utils::is_default")]
     name: Option<String>,
-
-    #[serde(
-        rename = "nt",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "nt", skip_serializing_if = "utils::is_default")]
     notice: Option<String>,
-
-    #[serde(
-        rename = "a",
-        skip_serializing_if = "utils::is_default"
-    )]
+    #[serde(rename = "a", skip_serializing_if = "utils::is_default")]
     announce: bool,
 }
 
@@ -75,6 +59,34 @@ impl NewChannelInfo {
             notice,
             announce,
         }
+    }
+
+    pub(crate) fn session_id(&self) -> Id {
+        self.session_id
+    }
+
+    pub(crate) fn session_key(&self) -> &[u8] {
+        &self.session_key
+    }
+
+    pub(crate) fn set_session_key(&mut self, session_key: Vec<u8>) {
+        self.session_key = session_key;
+    }
+
+    pub(crate) fn permission(&self) -> Permission {
+        Permission::from_i32(self.permission)
+    }
+
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub(crate) fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    pub(crate) fn announce(&self) -> bool {
+        self.announce
     }
 }
 

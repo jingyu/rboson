@@ -30,7 +30,6 @@ use clap::{
 };
 use boson::{
     messaging::{
-        ContactHandler,
         Client,
         Contact,
         ContactType,

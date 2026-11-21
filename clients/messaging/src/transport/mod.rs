@@ -29,7 +29,7 @@ use futures::{
     stream::FuturesUnordered,
     FutureExt,
 };
-use log::{debug, warn};
+use log::warn;
 
 use boson_api::{
     Result,
@@ -43,10 +43,7 @@ use crate::{
     errors::EncodingError,
     ContactHandler,
     ChannelHandler,
-    ConversationHandler,
-    FriendRequestHandler,
-    channel::Channel,
-    contact::{Contact, ContactType}
+    contact::ContactType
 };
 use crate::internal::{
     session_context::SessionContext,
@@ -60,7 +57,7 @@ use crate::internal::{
 };
 use crate::rpc::{
     request::RPCRequest,
-    response::Params as ResponseParams
+    response::Value
 };
 
 pub(super) const MESSAGE_VERSION: u8 = 2;
@@ -240,7 +237,7 @@ impl RpcServer {
 
         let result = self.send_rpccall(self.peer_id(), request).await?;
         let confirmed = match result {
-            ResponseParams::ContactMutate(confirmed) => confirmed,
+            Value::ContactMutate(confirmed) => confirmed,
             _ => return Err(EncodingError::new("RPC result is not a contact revision").into()),
         };
         if confirmed < revision || confirmed < self.contacts_revision.get() {
@@ -357,20 +354,6 @@ impl RpcServer {
 
     pub(crate) async fn put_conversation(&self, conversation: PhotonConversation) -> Result<()> {
         self.repository.borrow_mut().put_conversation(conversation)
-    }
-
-    pub(crate) async fn remove_conversation(&self, id: &Id) -> Result<()> {
-        self.repository
-            .borrow_mut()
-            .remove_messages_in_conversation(id)
-            .map(|_| ())
-    }
-
-    pub(crate) async fn remove_conversations(&self, ids: &[Id]) -> Result<()> {
-        for id in ids {
-            self.remove_conversation(id).await?;
-        }
-        Ok(())
     }
 
     pub(crate) async fn clear_conversations(&self, id: &Id) -> Result<()> {

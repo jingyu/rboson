@@ -19,6 +19,9 @@ use crate::{
     ChannelHandler,
     ContactHandler,
     options::OptionsBuilder,
+    ConversationHandler,
+    FriendRequestHandler,
+    Contact,
 };
 
 use super::*;
@@ -180,7 +183,7 @@ async fn remove_conversations_removes_all() {
     server.put_conversation(second.clone()).await.unwrap();
 
     server
-        .remove_conversations(&[*first.id(), *second.id()])
+        .remove_conversation_list(&[*first.id(), *second.id()])
         .await
         .unwrap();
 

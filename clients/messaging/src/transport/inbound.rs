@@ -2,23 +2,19 @@ use log::trace;
 use serde::Deserialize;
 
 use super::prelude::*;
+use crate::internal::notification::{Body, Notification};
 
-use crate::internal::{
-    notification::{Body, Notification},
-};
-
-use crate::interfaces::{
+use crate::{
+    FriendRequest,
     MessageOps,
     MessageOriginated,
 };
-use crate::rpc::response::RpcResponse;
-use crate::{
-    ContactHandler,
-    MessageType,
-    FriendRequestHandler,
-};
+use crate::rpc::response;
+use crate::MessageType;
 
-use crate::internal::photon_message::PhotonMessage;
+use crate::internal::photon_message::{
+    PhotonMessage,
+};
 
 #[derive(Deserialize)]
 pub(super) struct ChannelContactInfo {
@@ -31,6 +27,7 @@ pub(super) struct ChannelContactInfo {
     #[serde(rename = "a", default)]
     pub(super) announced: bool,
 }
+
 pub(super) struct DecodedContact {
     pub(super) contact: PhotonContact,
     pub(super) session: Option<CryptoIdentity>,
@@ -38,10 +35,17 @@ pub(super) struct DecodedContact {
 }
 
 pub(super) struct ContactState {
-    pub(super) contacts: HashMap<Id, PhotonContact>,
+    pub(super) contacts: HashMap<Id, Contact>,
     pub(super) sessions: HashMap<Id, SessionContext>,
     pub(super) channels: HashMap<Id, PhotonChannel>,
     pub(super) revision: i32,
+}
+
+impl PhotonMessage {
+    fn set_content(&mut self, content: PhotonContent) -> Message {
+        self.content = Some(content);
+        Box::new(self.clone()) as Message
+    }
 }
 
 impl RpcServer {
@@ -93,18 +97,19 @@ impl RpcServer {
         }
 
         if let Err(error) = self.check_and_decrypt_message(&mut message).await {
-            warn!("Failed to check/decrypt incoming message: {error}");
+            warn!("{error}");
             return;
         }
 
-        match topic {
-            Topic::DeviceInbox => self.on_device_inbox_message(message, &from),
-            Topic::UserInbox => self.on_inbox_message(message, &from).await,
-            Topic::UserOutbox => self.on_outbox_message(message, &from).await,
+        let _ = match topic {
+            Topic::UserInbox => self.process_inbox_message(message, &from).await,
+            Topic::DeviceInbox => { self.on_device_inbox_message(message, &from); Ok(()) },
+            Topic::UserOutbox => self.process_outbox_message(message, &from).await,
             Topic::DeviceOutbox => {
                 warn!("Ignoring message from device outbox");
+                return;
             }
-        }
+        }.map_err(|error| warn!("{error}"));
     }
 
     async fn check_and_decrypt_message(&self, message: &mut PhotonMessage) -> Result<()> {
@@ -119,7 +124,9 @@ impl RpcServer {
         let decrypted = match message_type {
             MessageType::Content => {
                 let Some(conversation_id) = message.conversation_id() else {
-                    return Err(StateError::new("Conversation ID is not set").into());
+                    return Err(StateError::new(
+                        "Received a message with no conversation Id")
+                    .into());
                 };
                 let Some(contact) = self.contact(&conversation_id).await else {
                     return Err(StateError::new(format!(
@@ -128,17 +135,22 @@ impl RpcServer {
                 };
 
                 if contact.is_blocked() {
-                    return Err(StateError::new("Received a message from a blocked contact").into());
+                    return Err(StateError::new(
+                        "Received a message from a blocked contact"
+                    ).into());
                 }
                 if contact.contact_type() == ContactType::Channel {
                     // TODO: Channel content uses the channel conversation crypto context.
                 } else if contact.contact_type() == ContactType::Auto {
-                    return Err(StateError::new("Received a message from a contact of no friend.").into());
+                    return Err(StateError::new(
+                        "Received a message from a contact of no friend."
+                    ).into());
                 }
 
                 // A blocked user's messages in a channel are still delivered: the channel is a shared
 				// conversation, and dropping one member's messages would leave holes (replies without
 				// what they answer) and a view that differs from the other members'.
+
 
                 let mut sessions = self.session_contexts.lock().unwrap();
                 let session = sessions.get_mut(&conversation_id).ok_or_else(|| {
@@ -190,68 +202,66 @@ impl RpcServer {
             .ok();
     }
 
-    async fn on_inbox_message(&self, message: PhotonMessage, from: &Id) {
+    async fn process_inbox_message(&self, message: PhotonMessage, from: &Id) -> Result<()>{
         match message.message_type() {
+            MessageType::Content  => {
+                self.process_incoming_content_message(message, from).await
+            }
             MessageType::State  => {
-                self.on_state_message(message, &from).await
+                self.process_state_message(message, &from).await
             }
             MessageType::Handshake  => {
-                self.on_handshake(Topic::UserInbox, message, &from).await
-            }
-            MessageType::Content  => {
-                self.on_inbox_content_message(message, &from).await
+                self.process_incoming_handshake(message.clone(), &from)?;
+                if let Ok(handshake) = Handshake::deserialize(&message.payload_bytes) {
+                    if let HandshakeType::FriendRequestAccept(session_key) = handshake.body {
+                        self.accept_friend_handshake(
+                            *from,
+                            session_key,
+                            handshake.timestamp,
+                            true,
+                        ).await;
+                    }
+                }
+                Ok(())
             }
             MessageType::Control  => {
                 warn!("Ignoring control message from user inbox");
-            }
-            _ => {
-                warn!("Ignoring unsupported message type from user inbox");
+                Ok(())
             }
         }
     }
 
-    async fn on_outbox_message(&self, message: PhotonMessage, from: &Id) {
+    async fn process_outbox_message(&self, message: PhotonMessage, from: &Id) -> Result<()> {
         match message.message_type() {
             MessageType::Handshake => {
-                self.on_handshake(Topic::UserOutbox, message, &from).await
+                self.process_outgoing_handshake(message, &from).await?;
+                Ok(())
             }
             MessageType::Content => {
-                self.on_outbox_content_message(message, from).await;
+                self.on_outbox_content_message(message, from);
+                Ok(())
             }
             _ => {
                 warn!("Ignoring unsupported message type from user outbox");
+                Ok(())
             }
         }
     }
 
-    async fn on_state_message(&self, message: PhotonMessage, from: &Id) {
-        self.try_on_state_message(message, from)
-            .await
-            .map_err(|error| warn!("{error}"))
-            .ok();
-    }
-
+    /*
     async fn on_handshake(&self, topic: Topic, message: PhotonMessage, from: &Id) {
         self.try_on_handshake(topic, message, *from)
             .await
             .map_err(|error| warn!("{error}"))
             .ok();
-    }
+    }*/
 
-    async fn on_inbox_content_message(&self, message: PhotonMessage, from: &Id) {
-        if from == self.user_id() {
-            warn!("Ignoring content message from user inbox that was sent by this user");
-            return;
-        }
-        self.process_incoming_content_message(message, *from).await;
-    }
-
-    async fn on_outbox_content_message(&self, message: PhotonMessage, from: &Id) {
+    fn on_outbox_content_message(&self, message: PhotonMessage, from: &Id) {
         if from != self.user_id() {
             warn!("Outbox message has an unexpected sender");
             return;
         }
-        self.process_outgoing_content_message(message, *from).await;
+        self.process_outgoing_content_message(message, *from);
     }
 
     fn try_on_device_inbox_message(&self, message: PhotonMessage, from: &Id) -> Result<()> {
@@ -277,66 +287,55 @@ impl RpcServer {
     }
 
     fn process_control_message(&self, payload: &[u8], from: &Id) -> Result<()> {
-        let deserded = serde_cbor::from_slice::<RpcResponse>(payload);
-        let response = deserded.map_err(|e| EncodingError::new(
-            &format!("Failed to decode RPC response: {e}")
-        ))?;
-
-        trace!("Received RPC response {}", response.id());
-
+        let response = response::RpcResponse::deserialize(payload)?;
+        trace!("Received rpc response: {}", response.id());
         self.pending_calls.respond(response, from)
     }
 
-    async fn try_on_state_message(&self, message: PhotonMessage, from: &Id) -> Result<()> {
+    async fn process_state_message(&self, message: PhotonMessage, from: &Id) -> Result<()> {
         let Value::Bytes(payload) = &message.payload else {
             return Err(EncodingError::new("Notification payload is not binary"));
         };
-        self.process_notification(payload, from).await.map_err(|e|e.into())
-    }
 
-    async fn process_notification(&self, payload: &[u8], from: &Id) -> Result<()> {
-        let notif = Notification::deserialize(payload)
-                .map_err(|e| EncodingError::new(
-                    &format!("Malformed notification: {e}")
-                ))?;
+        let notification = Notification::deserialize(payload)?;
+        if notification.source() == self.user_id() &&
+            notification.is_originated(self.device_id()) {
 
-        if notif.source() == self.user_id()
-                && notif.is_originated(self.device_id())
-           // && notif.is_channel_notification()
-        {
-            trace!("Ignoring the channel notification originated by this device");
+            // This notification was triggered by an RPC request from this device.
+			// Since the local state was already updated via the RPC response,
+			// this redundant notification can be safely ignored.
+            trace!("The channel notification originated by this device, ignoring it");
             return Ok(());
         }
 
         if self.peer_id() == from {
-            self.process_peer_notification(notif).await
-        } else {
-            let channel: Channel = match self.channel(from) {
-                Some(c) => Box::new(c),
-                None => {
-                    let Body::ChannelJoin(info) = notif.body() else {
-                        return Err(StateError::new(
-                            &format!("Received a notification for unknown channel {from}, ignoring it {notif:?}"),
-                        ));
-                    };
-
-                    if info.session_key().is_none() {
-                        return Err(StateError::new(
-                            &format!("Recieved a channel join notification but missing session key from {from}, ignoring it {notif:?}"),
-                        ));
-                    }
-
-                    let channel = PhotonChannel::try_from(info)?;
-                    self.put_channel(channel)?;
-                    self.channel(from)
-                        .map(|channel| Box::new(channel) as Channel)
-                        .ok_or_else(|| {
-                            StateError::new(&format!("Failed to create channel contact for {from}"))
-                        })?
-                }
-            };
-            self.process_channel_notification(notif, &channel).await
+            self.process_peer_notification(notification).await?;
+            return Ok(());
         }
+
+        let channel = match self.channel(from) {
+            Some(c) => c,
+            None => {
+                let Body::ChannelJoin(info) = notification.body() else {
+                    warn!("Received a notification for unknown channel {from}, ignoring it");
+                    return Ok(());
+                };
+
+                if info.session_key().is_none() {
+                    warn!("Recieved a channel join notification but missing session key from {from}, ignoring it");
+                    return Ok(());
+                }
+
+                let channel = PhotonChannel::try_from(info)?;
+                self.put_channel(channel)?;
+                self.channel(from).ok_or_else(|| {
+                    StateError::new(&format!("Failed to create channel contact for {from}"))
+                })?
+            }
+        };
+        self.process_channel_notification(notification, &channel)
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn process_peer_notification(&self, notif: Notification) -> Result<()> {
@@ -364,15 +363,15 @@ impl RpcServer {
                 trace!("Channel {} created", channel_info.channel_id());
                 let new_channel = PhotonChannel::try_from(channel_info)?;
 
-                let channel: Channel = match self.channel(channel_info.channel_id()) {
+                let channel = match self.channel(channel_info.channel_id()) {
                     Some(v) => {
                         trace!("Channel {} already exists, ignoring duplicate create channel notification",
                             channel_info.channel_id());
-                        Box::new(v)
+                        v
                     }
                     None => {
-                        self.put_channel(Self::to_photon_channel(new_channel.as_ref())?)?;
-                        Box::new(new_channel) as Channel
+                        self.put_channel(new_channel.clone())?;
+                        new_channel
                     }
                 };
 
@@ -384,7 +383,7 @@ impl RpcServer {
                         .borrow_mut()
                         .put_channel_members(channel_info.channel_id(), &members)?;
                 }
-                self.channel_listener.on_channel_created(&channel);
+                self.channel_listener.on_channel_created(&(Box::new(channel.clone()) as Box<dyn ChannelHandler>));
                 Ok(())
             },
             _ => {
@@ -398,19 +397,19 @@ impl RpcServer {
     async fn process_channel_notification(
         &self,
         notif: Notification,
-        channel: &Channel,
+        channel: &PhotonChannel,
     ) -> Result<()> {
         let channel_id = channel.id();
         match notif.body() {
             Body::ChannelDeletion => {
                 trace!("Channel {} deleted", channel_id);
                 self.remove_channel(channel.id()).await;
-                self.channel_listener.on_channel_deleted(&channel);
+                self.channel_listener.on_channel_deleted(&(Box::new(channel.clone()) as Box<dyn ChannelHandler>));
             }
             Body::ChannelJoin(info) => {
                 trace!("Channel {} joined", channel_id);
                 if self.channel(channel_id).is_none() {
-                    self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                    self.put_channel(channel.clone())?;
                 }
 
                 if info.members().is_empty() {
@@ -423,19 +422,22 @@ impl RpcServer {
                         .borrow_mut()
                         .put_channel_members(channel_id, &members)?;
                 }
-                self.channel_listener.on_joined_channel(channel);
+                self.channel_listener.on_joined_channel(&(Box::new(channel.clone()) as Box<dyn ChannelHandler>));
             }
             Body::ChannelLeave => {
                 trace!("Channel {} left", channel_id);
                 self.remove_channel(channel.id()).await;
-                self.channel_listener.on_left_channel(channel);
+                self.channel_listener.on_left_channel(&(Box::new(channel.clone()) as Box<dyn ChannelHandler>));
             }
             Body::ChannelSessionKeyRotate(encrypted_key) => {
                 trace!("Channel {} session key rotation", channel_id);
 
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
                 if notif.source() != channel.owner() {
                     warn!("Channel session key rotation has an unauthorized source");
@@ -465,29 +467,35 @@ impl RpcServer {
                     .unwrap()
                     .insert(*channel_id, self.session_context(*channel_id, session, true));
 
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
-                self.channel_listener.on_channel_session_key_rotated(&channel);
+                self.put_channel(channel.clone())?;
+                self.channel_listener.on_channel_session_key_rotated(&(Box::new(channel.clone()) as Box<dyn ChannelHandler>));
                 return Ok(());
             }
-            Body::ChannelOwnershipTransfer(new_owner) => {
+            Body::ChannelOwnershipTransfer(_new_owner) => {
                 trace!("Channel {} ownership transfer", channel_id);
                 /*
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel_snapshot(&channel_id) {
+                    Ok(channel) => channel,
+                    Err(error) => {
+                        warn!("Failed to get channel snapshot: {error}");
+                        return Ok(());
+                    }
                 };
                 let old_owner = *channel.owner();
                 channel.set_owner(*new_owner);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.channels_cache.borrow_mut().insert(*channel_id, channel.clone());
                 self.channel_listener
                     .on_channel_ownership_transferred(&channel, &old_owner, new_owner);
                 return Ok(());
                 */
             }
             Body::ChannelInfoUpdate(changes) => {
-                trace!("Channel {} info updated ", channel.id());
+                trace!("Channel {} info updated ", channel_id);
 
-                let mut updated = self.channel(channel_id).map(|v| Box::new(v) as Channel).unwrap();
+                let mut updated = self.channel(channel_id).ok_or_else(|| {
+                    warn!("Failed to get channel snapshot");
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "Channel not found")
+                })?;
                 if let Some(permission) = changes.get_permission() {
                     updated.set_permission(permission);
                 }
@@ -500,8 +508,8 @@ impl RpcServer {
                 if let Some(announced) = changes.get_announced() {
                     updated.set_announced(announced);
                 }
-                self.put_channel(Self::to_photon_channel(updated.as_ref())?)?;
-                self.channel_listener.on_channel_updated(&updated);
+                self.put_channel(updated.clone())?;
+                self.channel_listener.on_channel_updated(&(Box::new(updated.clone()) as Box<dyn ChannelHandler>));
             }
             Body::ChannelMembersRoleUpdate(update) => {
                 trace!("Channel {} members role updated: {} - {:?}",
@@ -510,47 +518,59 @@ impl RpcServer {
                     update.member_ids()
                 );
 
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
                 let changed = channel.update_member_roles(update.member_ids(), update.role());
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.put_channel(channel.clone())?;
                 self.channel_listener
-                    .on_channel_members_role_updated(&channel, &changed);
+                    .on_channel_members_role_updated(&(Box::new(channel.clone()) as Channel), &changed);
                 return Ok(());
             }
             Body::ChannelMembersBan(ids) => {
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
                 let changed = channel.update_member_roles(ids, Role::Banned);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.put_channel(channel.clone())?;
                 self.channel_listener
-                    .on_channel_members_banned(&channel, &changed);
+                    .on_channel_members_banned(&(Box::new(channel.clone()) as Channel), &changed);
                 return Ok(());
             }
             Body::ChannelMembersUnban(ids) => {
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
                 let changed = channel.update_member_roles(ids, Role::Member);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.put_channel(channel.clone())?;
                 self.channel_listener
-                    .on_channel_members_unbanned(&channel, &changed);
+                    .on_channel_members_unbanned(&(Box::new(channel.clone()) as Channel), &changed);
                 return Ok(());
             }
             Body::ChannelMembersRemove(ids) => {
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
                 let removed = channel.remove_members(ids);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.put_channel(channel.clone())?;
                 self.channel_listener
-                    .on_channel_members_removed(&channel, &removed);
+                    .on_channel_members_removed(&(Box::new(channel.clone()) as Channel), &removed);
                 return Ok(());
             }
             Body::ChannelMemberJoin(member) => {
@@ -559,28 +579,33 @@ impl RpcServer {
                     return Ok(());
                 }
 
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
                 channel.upsert_member(*member.id(), member.role(), member.joined());
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.put_channel(channel.clone())?;
                 self.channel_listener
-                    .on_channel_member_joined(&channel, &(Box::new(member.clone()) as ChannelMember));
+                    .on_channel_member_joined(&(Box::new(channel.clone()) as Channel), &(Box::new(member.clone()) as ChannelMember));
                 return Ok(());
             }
             Body::ChannelMemberLeave(id) => {
-                let Some(mut channel) = self.channel(&channel_id).map(|v| Box::new(v) as Channel) else {
-                    warn!("Failed to get channel snapshot");
-                    return Ok(());
+                let mut channel = match self.channel(&channel_id) {
+                    Some(channel) => channel,
+                    None => {
+                        warn!("Failed to get channel snapshot");
+                        return Ok(());
+                    }
                 };
-
                 let member = channel.members().into_iter().find(|member| member.id() == id);
                 channel.remove_members(&[*id]);
-                self.put_channel(Self::to_photon_channel(channel.as_ref())?)?;
+                self.put_channel(channel.clone())?;
                 if let Some(member) = member {
                     self.channel_listener
-                        .on_channel_member_left(&channel, &member);
+                        .on_channel_member_left(&(Box::new(channel.clone()) as Channel), &member);
                 }
                 return Ok(());
             }
@@ -635,15 +660,19 @@ impl RpcServer {
         }
 
         let previous = self
-            .contacts()
-            .await
+            .repository
+            .borrow_mut()
+            .load_contacts()
+            .unwrap_or_default()
             .into_iter()
-            .map(|contact| (*contact.id(), contact))
+            .map(|contact| (*contact.id(), Box::new(contact) as Contact))
             .collect::<HashMap<_, _>>();
         let sessions = self.session_contexts.lock().unwrap().clone();
         let channels = self
-            .channels()
-            .await
+            .repository
+            .borrow_mut()
+            .load_channels()
+            .unwrap_or_default()
             .into_iter()
             .map(|channel| (*channel.id(), channel))
             .collect::<HashMap<_, _>>();
@@ -658,10 +687,10 @@ impl RpcServer {
             SyncType::Delta => self.apply_delta(sync, &mut state)?,
             SyncType::UpToDate => unreachable!("handled above"),
         }
-        self.commit_contact_state(previous, state).map_err(|e| e.into())
+        self.commit_contact_state(previous, state)
+            .map_err(|e| e.into())
     }
 
-    /// Replaces the whole contact book with a snapshot.
     pub(super) fn apply_snapshot(&self, sync: &ContactSync, state: &mut ContactState) -> Result<()> {
         if sync.revision() < state.revision {
             return Err(StateError::new("Invalid or outdated contact snapshot"));
@@ -679,7 +708,7 @@ impl RpcServer {
                 contact,
                 session,
                 channel,
-            } = self.decode_contact(&opaque)?;
+            } = self.decode_contact(opaque)?;
             let id = *contact.id();
             if state.contacts.contains_key(&id) {
                 return Err(EncodingError::new("Snapshot contains duplicate contacts"));
@@ -693,17 +722,12 @@ impl RpcServer {
             if let Some(channel) = channel {
                 state.channels.insert(id, channel);
             }
-            state.contacts.insert(id, contact);
+            state.contacts.insert(id, Box::new(contact));
         }
         state.revision = sync.revision();
         Ok(())
     }
 
-    /// Flags the mutations whose effect a later mutation of the same delta
-    /// fully replaces, so they do not need to be decrypted.
-    ///
-    /// A fresh client replays the whole history of the account; decrypting
-    /// every superseded add/update made connecting scale with that history.
     pub(super) fn superseded_mutations(mutations: &[ContactMutation]) -> Vec<bool> {
         let mut superseded = vec![false; mutations.len()];
         let mut touched = HashSet::new();
@@ -720,7 +744,6 @@ impl RpcServer {
         superseded
     }
 
-    /// Replays an ordered list of contact mutations.
     pub(super) fn apply_delta(&self, sync: &ContactSync, state: &mut ContactState) -> Result<()> {
         let original_revision = self.contacts_revision.get();
         let superseded = Self::superseded_mutations(sync.mutations());
@@ -768,7 +791,7 @@ impl RpcServer {
                     if let Some(channel) = channel {
                         state.channels.insert(id, channel);
                     }
-                    state.contacts.insert(id, contact);
+                    state.contacts.insert(id, Box::new(contact));
                 }
                 Some(MutationData::Remove(ids)) => {
                     for id in ids {
@@ -795,10 +818,9 @@ impl RpcServer {
         Ok(())
     }
 
-    /// Publishes a validated contact book and tells the listeners what moved.
     pub(super) fn commit_contact_state(
         &self,
-        previous: HashMap<Id, PhotonContact>,
+        previous: HashMap<Id, Contact>,
         state: ContactState,
     ) -> Result<()> {
         let removed: Vec<_> = previous
@@ -806,13 +828,13 @@ impl RpcServer {
             .filter(|id| !state.contacts.contains_key(id))
             .copied()
             .collect();
-        let added: Vec<_> = state
+        let added: Vec<Contact> = state
             .contacts
             .values()
             .filter(|contact| !previous.contains_key(contact.id()))
             .cloned()
             .collect();
-        let updated: Vec<PhotonContact> = state
+        let updated: Vec<Contact> = state
             .contacts
             .values()
             .filter(|contact| Self::contact_changed(previous.get(contact.id()), contact))
@@ -823,28 +845,37 @@ impl RpcServer {
             let _ = self.repository.borrow_mut().remove_contact_locally(id);
         }
         for (id, contact) in &state.contacts {
-            if contact.contact_type == ContactType::Channel as u8 {
-                if let Some(channel) = state.channels.get(id) {
-                    let session_key = match contact.session_key() {
-                        Some(key) => key.to_vec(),
-                        None => match state.sessions.get(id) {
-                            Some(session) => self
-                                .user_identity
-                                .encrypt_into(self.user_id(), session.private_key())?,
-                            None => Vec::new(),
-                        },
-                    };
-                    let boxed: Channel = Box::new(channel.clone());
-                    self.repository
-                        .borrow_mut()
-                        .store_channel(state.revision, &boxed, &session_key)?;
-                    continue;
-                }
+            if let Some(channel) = state.channels.get(id) {
+                let photon = channel.photon_contact();
+                let session_key = match photon.session_key() {
+                    Some(key) => key.to_vec(),
+                    None => match state.sessions.get(id) {
+                        Some(session) => self
+                            .user_identity
+                            .encrypt_into(self.user_id(), session.private_key())?,
+                        None => Vec::new(),
+                    },
+                };
+                let boxed: Channel = Box::new(channel.clone());
+                self.repository
+                    .borrow_mut()
+                    .store_channel(state.revision, &boxed, &session_key)?;
+                continue;
             }
+            let mut data = ContactData::from(contact);
+            data.set_revision(state.revision);
+            if let Some(session) = state.sessions.get(id) {
+                data.set_session_key(
+                    self.user_identity
+                        .encrypt_into(self.user_id(), session.private_key())?,
+                );
+            }
+            let session_key = data.session_key().map(|key| key.to_vec());
+            let photon = PhotonContact::try_from(data)?;
             self.repository.borrow_mut().put_contact(
                 state.revision,
-                contact,
-                contact.session_key(),
+                &photon,
+                session_key.as_deref(),
             )?;
         }
 
@@ -861,19 +892,15 @@ impl RpcServer {
             self.contact_listener.on_contacts_removed(&removed);
         }
         for contact in added {
-            let contact: Contact = Box::new(contact);
             self.contact_listener.on_contact_added(&contact);
         }
         if !updated.is_empty() {
-            let updated: Vec<Contact> = updated.into_iter().map(|contact| Box::new(contact) as Contact).collect();
             self.contact_listener.on_contacts_updated(&updated);
         }
         Ok(())
     }
 
-    /// Whether a contact differs from its stored copy in anything a listener
-    /// would report. Contacts absent from `old` are additions, not updates.
-    pub(super) fn contact_changed(old: Option<&PhotonContact>, new: &PhotonContact) -> bool {
+    pub(super) fn contact_changed(old: Option<&Contact>, new: &Contact) -> bool {
         let Some(old) = old else {
             return false;
         };
@@ -887,135 +914,152 @@ impl RpcServer {
             || old.contact_type() != new.contact_type()
     }
 
-    async fn try_on_handshake(
+    fn process_incoming_handshake(
         &self,
-        topic: Topic,
         message: PhotonMessage,
-        from: Id
+        from: &Id
     ) -> Result<()> {
-        let timestamp = message.created_at_u64() as i64;
-        let originated_here = match Self::message_id(self.device_id(), timestamp) {
-            Ok(id) => MessageOps::id(&message) == &id,
-            Err(_) => {
-                return Err(StateError::new("Failed to derive handshake message id").into());
-            }
-        };
-        if matches!(topic, Topic::UserOutbox) && originated_here {
-            return Ok(());
-        }
-        let friend_id = if matches!(topic, Topic::UserOutbox) {
-            *message.recipient()
-        } else {
-            from
-        };
-        let is_inbox = matches!(topic, Topic::UserInbox);
-        if (is_inbox && *message.recipient() != *self.user_identity.id())
-            || (!is_inbox && from != *self.user_identity.id())
-        {
-            warn!("Handshake is not addressed to this user");
-            return Ok(());
-        }
-
-        let handshake = match self.open_handshake(message.payload, &friend_id, &from) {
-            Ok(handshake) => handshake,
-            Err(error) => {
-                warn!("{error}");
-                return Ok(());
-            }
-        };
+        let handshake = Handshake::deserialize(&message.payload_bytes)?;
         match handshake.body {
             HandshakeType::FriendRequest(hello) => {
-                self.on_friend_request(
+                let friend_id = *from;
+                if handshake.timestamp < 0 {
+                    return Ok(());
+                }
+                if let Some(contact) = self.repository.borrow_mut().contact(&friend_id).ok().flatten() {
+                    if contact.is_blocked()
+                        || contact.contact_type() == ContactType::Friend
+                        || contact.contact_type() == ContactType::Channel
+                    {
+                        return Ok(());
+                    }
+                }
+                if self.friend_request(&friend_id).is_some_and(|request| {
+                    request.is_accepted() || request.created_at() >= handshake.timestamp
+                }) {
+                    debug!("Ignoring duplicate or stale friend request from {friend_id}");
+                    return Ok(());
+                }
+                let request = PhotonFriendRequest::create(
                     friend_id,
-                    if is_inbox {
-                        from
-                    } else {
-                        *self.user_identity.id()
-                    },
-                    hello.unwrap_or_default(),
-                    handshake.timestamp as i64,
-                    is_inbox,
-                ).await;
+                    friend_id,
+                    hello.clone(),
+                    handshake.timestamp,
+                );
+                self.put_friend_request(&request)?;
+                self.friend_request_listener
+                    .on_friend_request(&friend_id, hello.as_deref());
                 Ok(())
             }
-            HandshakeType::FriendRequestAccept(session_key) => {
-                self.accept_friend_handshake(
-                    friend_id,
-                    session_key,
-                    handshake.timestamp as i64,
-                    is_inbox
-                )
-                .await;
-                Ok(())
-            }
+            HandshakeType::FriendRequestAccept(_) => Ok(()),
         }
     }
 
-    /// Inbound stages 3 and 4 for a handshake: unprotect and decode it.
-    fn open_handshake(&self, payload: Value, friend_id: &Id, from: &Id) -> Result<Handshake> {
-        let Value::Bytes(bytes) = payload else {
-            return Err(EncodingError::new("Handshake payload is not binary").into());
-        };
-        let mut handshake = Handshake::deserialize(&bytes)?;
-        handshake.from = Some(*from);
-        let _ = friend_id;
-        Ok(handshake)
-    }
-
-
-    async fn on_friend_request(
+    async fn accept_friend_handshake(
         &self,
-        user_id: Id,
-        initiator_id: Id,
-        hello: String,
+        friend_id: Id,
+        session_key: Vec<u8>,
         timestamp: i64,
-        notify: bool,
+        is_inbox: bool,
     ) {
-        if timestamp < 0 {
-            warn!("Ignoring friend request from {user_id} with a negative timestamp");
+        let _request = self.requests.lock().await;
+
+        if self.friend_request(&friend_id).is_some_and(|request| request.is_accepted()) {
+            debug!("Ignoring duplicate friend request acceptance from {friend_id}");
             return;
         }
-        if let Some(contact) = self.contact(&user_id).await {
-            if contact.is_blocked()
-                || contact.contact_type() == ContactType::Friend
-                || contact.contact_type() == ContactType::Channel
-            {
+        let initiator_id = if is_inbox { *self.user_identity.id() } else { friend_id };
+        let request = match self.pending_friend_request(&friend_id, &initiator_id) {
+            Ok(request) => request,
+            Err(error) => {
+                warn!("Failed to find pending friend request for {friend_id}: {error}");
                 return;
             }
-        }
-
-        if self.friend_request(&user_id)
-            .is_some_and(|request| request.is_accepted() || request.created_at() >= timestamp)
-        {
-            debug!("Ignoring duplicate or stale friend request from {user_id}");
+        };
+        let created = request
+            .created()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or(0);
+        if timestamp < created {
+            warn!("Friend request acceptance predates the request");
             return;
         }
+        let session_identity = match CryptoIdentity::try_from(session_key.as_slice()) {
+            Ok(identity) => identity,
+            Err(_) => return,
+        };
+        if let Err(error) = self.store_friend_contact(&friend_id, &session_identity).await {
+            warn!("Failed to store friend contact: {error}");
+            return;
+        }
+        self.session_contexts
+            .lock()
+            .unwrap()
+            .entry(friend_id)
+            .or_insert_with(|| self.session_context(friend_id, session_identity, false));
+        if let Some(mut request) = self.friend_request(&friend_id) {
+            if !request.is_accepted() {
+                request.accept(timestamp);
+                if let Err(error) = self.put_friend_request(&request) {
+                    warn!("Persisting accepted friend request failed: {error}");
+                }
+            }
+        }
+        self.friend_request_listener.on_friend_request_accepted(&friend_id);
+    }
 
-        let request = PhotonFriendRequest::create(
-            user_id,
-            initiator_id,
-            Some(hello.clone()),
-            timestamp,
-        );
-
-        if let Err(error) = self.put_friend_request(&request) {
-            warn!("{error}");
+    async fn process_outgoing_handshake(&self, message: PhotonMessage, from: &Id) -> Result<()> {
+        if message.is_originated(self.device_id()) {
+            trace!("The handshake {} to {} is redundant (or originated from self), ignoring it.",
+                MessageOps::id(&message), from);
+            return Ok(());
         }
 
-        if notify {
-            self.friend_request_listener
-                .on_friend_request(&user_id, Some(&hello));
+        let handshake = Handshake::deserialize(&message.payload_bytes)?;
+        match handshake.body {
+            HandshakeType::FriendRequest(hello) => {
+                trace!("Friend request sent to {}", message.recipient());
+                let request = PhotonFriendRequest::create(
+                    *message.recipient(),
+                    *self.user_identity.id(),
+                    hello,
+                    handshake.timestamp,
+                );
+                self.put_friend_request(&request)?;
+                Ok(())
+            }
+            HandshakeType::FriendRequestAccept(_session_key) => {
+                trace!("Accept friend request from {}", message.recipient());
+                let user_id = *message.recipient();
+                if let Some(mut request) = self.friend_request(&user_id) {
+                    if !request.is_accepted()
+                        && request.initiator_id() == self.user_identity.id()
+                        && handshake.timestamp >= request.created_at()
+                    {
+                        request.accept(handshake.timestamp);
+                        self.put_friend_request(&request)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
-    pub(super) async fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<PhotonFriendRequest> {
-        let Some(request) = self.friend_request(user_id) else {
-            return Err(ArgumentError::new(format!("No friend request found for {user_id}")));
-        };
-
-        if self.contact(user_id).await.is_some_and(|contact| {
-            contact.is_blocked() || contact.contact_type() == ContactType::Channel
-        }) {
+    pub(super) fn pending_friend_request(&self, user_id: &Id, initiator_id: &Id) -> Result<FriendRequest> {
+        let request = self
+            .friend_request(user_id)
+            .ok_or_else(|| ArgumentError::new(format!("No friend request found for {user_id}")))?;
+        if self
+            .repository
+            .borrow_mut()
+            .contact(user_id)
+            .ok()
+            .flatten()
+            .is_some_and(|contact| {
+                contact.is_blocked() || contact.contact_type() == ContactType::Channel
+            })
+        {
             return Err(ArgumentError::new(
                 "Cannot accept a friend request from a blocked user or channel",
             ));
@@ -1033,14 +1077,12 @@ impl RpcServer {
         if request.is_expired() {
             return Err(ArgumentError::new("Friend request has expired"));
         }
-        Ok(request.clone())
+        Ok(Box::new(request.clone()))
     }
 
     /// Records a friend locally, including their session key.
     pub(super) async fn store_friend_contact(&self, user_id: &Id, session: &CryptoIdentity) -> Result<()> {
-        if self
-            .contact(user_id)
-            .await
+        if self.contact(user_id).await
             .is_some_and(|contact| contact.contact_type() == ContactType::Friend)
         {
             return Ok(());
@@ -1049,7 +1091,7 @@ impl RpcServer {
         let mut data = ContactData::new(
             *user_id,
             ContactType::Friend as u8,
-            boson_api::as_ms!(SystemTime::now()) as i64,
+            Self::current_timestamp()?,
         );
         data.set_session_key(self.user_identity.encrypt_into(
             self.user_id(),
@@ -1058,281 +1100,108 @@ impl RpcServer {
         data.revision = revision;
         let session_key = data.session_key().map(|key| key.to_vec());
         let mutation = ContactMutation::add(revision, data.encode_into(&self.user_identity)?);
-        self.apply_contact_mutation(mutation, revision, "Friend contact revision is outdated")
+        let confirmed = self
+            .apply_contact_mutation(mutation, revision, "Friend contact revision is outdated")
             .await?;
-        if let Some(contact) = self.contact(user_id).await {
-            self.persist_contact(&contact, session_key.as_deref())?;
-        }
+        let contact = data.contact(confirmed)?;
+        self.persist_contact(&contact, session_key.as_deref())?;
         Ok(())
     }
 
-    /// Completes an acceptance we did not initiate: the peer said yes.
-    pub(super) async fn accept_friend_handshake(
-        &self,
-        friend_id: Id,
-        session_key: Vec<u8>,
-        timestamp: i64,
-        is_inbox: bool,
-    ) {
-        let _request = self.requests.lock().await;
-
-        if self.friend_request(&friend_id).is_some_and(|request| request.is_accepted()) {
-            debug!("Ignoring duplicate friend request acceptance from {friend_id}");
-            return;
+    async fn conversation_or_create(&self, id: &Id) -> Result<PhotonConversation> {
+        if let Some(conversation) = self.conversation(id).await {
+            return Ok(conversation);
         }
-        let initiator_id = if is_inbox {
-            *self.user_identity.id()
-        } else {
-            friend_id
-        };
-        let request = match self.pending_friend_request(&friend_id, &initiator_id).await {
-            Ok(req) => req,
-            Err(error) => {
-                warn!("Failed to find pending friend request for {friend_id}: {error}");
-                return;
-            }
-        };
-        if timestamp< request.created_at() {
-            warn!("Friend request acceptance predates the request");
-            return;
-        }
-        let session_identity = match CryptoIdentity::try_from(session_key.as_slice()) {
-            Ok(identity) => identity,
-            Err(_) => return,
-        };
-        if let Err(error) = self.store_friend_contact(&friend_id, &session_identity).await {
-            warn!("Failed to store friend contact: {error}");
-            return;
-        }
-        self.session_contexts
-            .lock()
-            .unwrap()
-            .entry(friend_id)
-            .or_insert_with(|| self.session_context(friend_id, session_identity, false));
-        self.on_friend_request_accepted(friend_id, timestamp as i64, is_inbox).await;
-    }
-
-    pub(super) async fn on_friend_request_accepted(&self, user_id: Id, timestamp: i64, notify: bool) {
-        if timestamp < 0 {
-            warn!("Ignoring friend request acceptance from {user_id} with a negative timestamp");
-            return;
-        }
-
-        let Some(mut request) = self.friend_request(&user_id) else {
-            return;
-        };
-
-        if request.is_accepted() || request.is_expired() {
-            return;
-        }
-        let initiator_id = if notify {
-            self.user_identity.id()
-        } else {
-            &user_id
-        };
-
-        if request.initiator_id() != initiator_id || timestamp < request.created_at() {
-            warn!("Ignoring friend request acceptance from {user_id} that does not match the pending request");
-            return;
-        }
-
-        request.accept(timestamp);
-        if let Err(error) = self.put_friend_request(&request) {
-            warn!("Persisting accepted friend request failed: {error}");
-        }
-
-        if self
-            .contact(&user_id)
+        let contact = self
+            .contact(id)
             .await
-            .is_some_and(|contact| contact.contact_type() == ContactType::Friend)
-        {
-            if notify {
-                self.friend_request_listener
-                    .on_friend_request_accepted(&user_id);
-            }
-            return;
-        }
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis() as i64)
-            .unwrap_or(0);
-        let mut contact = PhotonContact::new(user_id, ContactType::Friend, now_ms);
-        contact.set_revision(self.contacts_revision.get());
-        if let Err(error) = self.put_contact(&contact).await {
-            warn!("Persisting friend contact failed: {error}");
-        }
-        if notify {
-            self.friend_request_listener
-                .on_friend_request_accepted(&user_id);
-        }
-        let contact: Contact = Box::new(contact);
-        self.contact_listener.on_contact_added(&contact);
+            .ok_or_else(|| StateError::new(format!("No contact found for {id}")))?;
+        Ok(PhotonConversation::new(Box::new(contact) as Contact))
     }
 
     async fn process_incoming_content_message(
         &self,
         mut message: PhotonMessage,
-        from: Id
-    ) {
-       let contact_id = if *message.recipient() != *self.user_id() {
-            *message.recipient()
-        } else {
-            from
-        };
-        let contact = self.contact(&contact_id).await;
-        if contact.as_ref().is_some_and(|contact| contact.is_blocked()) {
-            warn!("Message is from a blocked contact");
-            return;
-        }
-        if *message.recipient() != *self.user_id()
-            && !contact
-                .as_ref()
-                .is_some_and(|contact| contact.contact_type() == ContactType::Channel)
-        {
-            warn!("Content message has an unexpected recipient");
-            return;
-        }
-        let content_bytes = message.payload_bytes.clone();
-        let content = match PhotonContent::parse(&content_bytes) {
-            Ok(content) => content,
-            Err(error) => {
-                warn!("Failed to parse message content: {error}");
-                return;
-            }
-        };
-        message.set_from(from);
-        let now = now_millis();
-        message.set_received_at(now);
-
-        message.payload_bytes = content_bytes;
-        message.content = Some(content);
-        message.set_converstation_id(contact_id);
-        let created_at = match i64::try_from(message.created_at_u64()) {
-            Ok(timestamp) => timestamp,
-            Err(_) => {
-                warn!("Message timestamp is out of range");
-                return;
-            }
-        };
-        let conversation_contact = contact
-            .unwrap_or_else(|| PhotonContact::new(contact_id, ContactType::Auto, created_at));
-        if let Err(error) = self.repository.borrow_mut().put_message(&mut message) {
-            warn!("Persisting inbound message failed: {error}");
-        }
-        let boxed_message: Message = Box::new(message.clone());
-        let mut conversation = match self.conversation(&contact_id).await {
-            Some(conversation) => conversation,
-            None => crate::internal::photon_conversation::PhotonConversation::new(Box::new(conversation_contact) as Contact),
-        };
-        if let Err(error) = conversation.update(boxed_message.clone()) {
-            warn!("Failed to update conversation: {error}");
-        }
-        if let Err(error) = self.put_conversation(conversation.clone()).await {
-            warn!("Failed to store conversation: {error}");
-        }
-        self.message_listener.on_message(&boxed_message);
-    }
-
-    async fn process_outgoing_content_message(&self, mut message: PhotonMessage, from: Id) {
-
-        let contact_id = *message.recipient();
-        let content_bytes = message.payload_bytes.clone();
-        let content = match PhotonContent::parse(&content_bytes) {
-            Ok(content) => content,
-            Err(error) => {
-                warn!("Failed to parse message content: {error}");
-                return;
-            }
-        };
-        message.set_from(from);
-        message.set_sent(now_millis());
-        message.payload_bytes = content_bytes;
-        message.content = Some(content);
-        message.set_converstation_id(contact_id);
-        let created_at = match i64::try_from(message.created_at_u64()) {
-            Ok(timestamp) => timestamp,
-            Err(_) => {
-                warn!("Message timestamp is out of range");
-                return;
-            }
-        };
-        let originated_here = match Self::message_id(self.device_id(), created_at) {
-            Ok(id) => MessageOps::id(&message) == &id,
-            Err(error) => {
-                warn!("Failed to derive message id: {error}");
-                return;
-            }
-        };
-        if originated_here {
-            self.message_listener.on_sent(&(Box::new(message) as Message));
-            return;
-        }
-        let conversation_contact = self
-            .contact(&contact_id)
-            .await
-            .unwrap_or_else(|| PhotonContact::new(contact_id, ContactType::Auto, created_at));
-        if let Err(error) = self.repository.borrow_mut().put_message(&mut message) {
-            warn!("Persisting outbound message failed: {error}");
-        }
-        let boxed_message: Message = Box::new(message.clone());
-        let mut conversation = match self.conversation(&contact_id).await {
-            Some(conversation) => conversation,
-            None => crate::internal::photon_conversation::PhotonConversation::new(Box::new(conversation_contact) as Contact),
-        };
-        if let Err(error) = conversation.update(boxed_message.clone()) {
-            warn!("Failed to update conversation: {error}");
-        }
-        if let Err(error) = self.put_conversation(conversation.clone()).await {
-            warn!("Failed to store conversation: {error}");
-        }
-        self.message_listener.on_sent(&boxed_message);
-    }
-
-    /// Inbound stages 3 and 4 for a content message.
-    ///
-    /// Returns the plaintext CBOR document together with its headers and body.
-    /// Our own outbox copies are sealed for the session, everything else by
-    /// the sender with the session key.
-    pub(super) fn open_content(
-        &self,
-        contact_id: &Id,
-        outbox: bool,
         from: &Id,
-        payload: &Value,
-    ) -> Result<(Vec<u8>, PhotonContent)> {
-        let encrypted = match payload {
-            Value::Bytes(bytes) => Ok(bytes),
-            _ => Err(EncodingError::new(format!("Content payload is not binary"))),
-        }?;
+    ) -> Result<()> {
+        if from == self.user_id() {
+            return Err(StateError::new("Received a message from self").into());
+        }
 
-        let content_bytes = {
-            let mut sessions = self.session_contexts.lock().unwrap();
-            let session = sessions
-                .get_mut(contact_id)
-                .ok_or_else(|| StateError::new(format!("No friend session for {contact_id}")))?;
-            if outbox {
-                session.tx_crypto_context()?.decrypt_into(&encrypted)?
-            } else {
-                session
-                    .rx_crypto_context_for(from)?
-                    .decrypt_into(&encrypted)?
+        let content = match PhotonContent::parse(&message.payload_bytes) {
+            Ok(content) => content,
+            Err(error) => {
+                warn!("Malformed incoming content: {error}");
+                return Err(error);
             }
         };
+        let content_message = message.set_content(content);
+        message.set_from(*from);
 
-        let content = PhotonContent::parse(&encrypted)
-            .map_err(|error| EncodingError::new(format!("Malformed content: {error}")))?;
-
-        if !matches!(content.format(), ContentFormat::Text | ContentFormat::Binary) {
-            return Err(EncodingError::new("Unsupported message content body"));
+        if let Err(error) = self.repository.borrow_mut().put_message(&mut message) {
+            error!(
+                "Failed to persist incoming message {}: {error}",
+                MessageOps::id(&message)
+            );
         }
-        Ok((content_bytes, content))
+
+        let Some(conversation_id) = message.conversation_id().copied() else {
+            return Err(StateError::new("Conversation ID is missing").into());
+        };
+
+        match self.conversation_or_create(&conversation_id).await {
+            Ok(mut conversation) => {
+                if let Err(error) = conversation.update(content_message.clone()) {
+                    warn!("Failed to update conversation {conversation_id}: {error}");
+                }
+                let _ = self.repository.borrow_mut().put_conversation(conversation);
+            }
+            Err(error) => {
+                warn!("Failed to get or create conversation {conversation_id}: {error}");
+            }
+        }
+
+        self.message_listener.on_message(&content_message);
+        Ok(())
     }
 
-    pub(super) fn timestamp(timestamp: i64) -> SystemTime {
-        if timestamp < 0 {
-            return SystemTime::now();
+    fn process_outgoing_content_message(&self, mut message: PhotonMessage, from: Id) {
+        let contact_id = message.conversation_id().copied().unwrap_or(*message.recipient());
+
+        let content = match PhotonContent::parse(&message.payload_bytes) {
+            Ok(content) => content,
+            Err(error) => {
+                warn!("Malformed outgoing content: {error}");
+                return;
+            }
+        };
+        let content_message = message.set_content(content);
+        message.set_from(from);
+        message.set_sent(now_millis() as i64);
+
+        if message.is_originated(self.device_id()) {
+            trace!(
+                "Message {} sent to {} originated from this device",
+                MessageOps::id(&message),
+                contact_id
+            );
+            self.message_listener.on_sent(&content_message);
+            return;
         }
-        boson_api::from_ms!(timestamp as u64)
+
+        trace!(
+            "Message {} sent to {} originated from another device",
+            MessageOps::id(&message),
+            contact_id
+        );
+        if let Err(error) = self.repository.borrow_mut().put_message(&mut message) {
+            warn!("Failed to persist outgoing message: {error}");
+        }
+        self.message_listener.on_sent(&content_message);
+    }
+
+    fn current_timestamp() -> Result<i64> {
+        Ok(now_millis() as i64)
     }
 
     pub(super) fn message_id(device_id: &Id, timestamp: i64) -> Result<Id> {
@@ -1359,7 +1228,7 @@ impl RpcServer {
 
         // 3. Send it to the home peer and 4. decode the delta it reports.
         let result = self.send_rpccall(self.peer_id(), request).await?;
-        let ResponseParams::ContactSync(sync) = result else {
+        let response::Value::ContactSync(sync) = result else {
             return Err(EncodingError::new("RPC result is not a contact sync").into());
         };
 
@@ -1380,7 +1249,7 @@ impl RpcServer {
     ) -> Result<i32> {
         let request = RPCRequest::contact_mutate(0, mutation);
         let result = self.send_rpccall(self.peer_id(), request).await?;
-        let ResponseParams::ContactMutate(revision) = result else {
+        let response::Value::ContactMutate(revision) = result else {
             return Err(EncodingError::new("RPC result is not a contact revision").into());
         };
         if revision < minimum || revision < self.contacts_revision.get() {
@@ -1402,9 +1271,9 @@ impl RpcServer {
     }
 }
 
-fn now_millis() -> i64 {
+fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
+        .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }

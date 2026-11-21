@@ -195,11 +195,6 @@ impl RpcServer {
         )
     }
 
-    pub(crate) async fn publish(&self, payload: Vec<u8>, what: &str) -> Result<()> {
-        let client = self.client()?;
-        super::transport::publish_outbox(&client, payload, what).await
-    }
-
     pub(crate) fn refresh_credentials(&self, password: &str) {
         let username = self.options.user_id().to_base58();
         let mut transport = self.mqtt_eventloop.try_lock()
